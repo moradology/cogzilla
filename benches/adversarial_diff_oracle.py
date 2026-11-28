@@ -2357,6 +2357,44 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     }))
     out["w82_mosaic_f64"] = p_w82_mosaic
 
+    # Wave 83: Mixed-sign integer STAC promotion (uint16 > 32767 + int16 < 0 -> int32) + #671 hole-mask smoothing
+    p_w83_u16 = synth_dir / "w83_u16.tif"
+    p_w83_i16 = synth_dir / "w83_i16.tif"
+    u16_w83 = (40000 + xx9.astype(np.int32) * 150).astype(np.uint16)
+    u16_w83[75:95, 60:80] = 0
+    i16_w83 = (-20000 + yy9.astype(np.int32) * 200).astype(np.int16)
+    i16_w83[75:95, 60:80] = -32768
+    with rasterio.open(
+        p_w83_u16, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_w83, 1)
+    with rasterio.open(
+        p_w83_i16, "w", driver="GTiff", width=128, height=128, count=1, dtype="int16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-32768,
+    ) as ds:
+        ds.write(i16_w83, 1)
+    out["w83_u16"] = p_w83_u16
+    out["w83_i16"] = p_w83_i16
+
+    p_w83_stac = synth_dir / "w83_stac_u16_i16.json"
+    p_w83_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w83-u16-i16",
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "assets": {
+            "u16": {"href": str(p_w83_u16), "type": "image/tiff; application=geotiff"},
+            "i16": {"href": str(p_w83_i16), "type": "image/tiff; application=geotiff"},
+        },
+        "links": [],
+    }))
+    out["w83_stac_u16_i16"] = p_w83_stac
+
     return out
 
 
@@ -7138,6 +7176,22 @@ def main() -> int:
                 ("PARITY W82 #670 OOM-TILE WebMercatorQuad 10/164/1024 -> 404", "GET", f"/cog/tiles/WebMercatorQuad/10/164/1024.png?url={q(s['w82_f64_a'])}", None, "status_404_parity"),
                 ("PARITY W82 #670 OOM-TILE WorldCRS84Quad 2/4/0 -> 404", "GET", f"/cog/tiles/WorldCRS84Quad/2/4/0.png?url={q(s['w82_f64_a'])}", None, "status_404_parity"),
                 ("PARITY W82 #670 OOM-TILE STAC 10/164/1024 -> 404", "GET", f"/stac/tiles/WebMercatorQuad/10/164/1024.png?url={q(s['w82_stac_f64'])}&assets=a", None, "status_404_parity"),
+                # --- Wave 83: Mixed-sign integer STAC promotion (u16+i16->i32) & #671 majority-valid (>=0.5) hole masking ---
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 tile .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16", None, "npy"),
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 tile .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16", None, "geotiff"),
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 /bbox 64x64.npy", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16", None, "npy"),
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 /bbox 64x64.tif", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.tif?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16", None, "geotiff"),
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 /preview 64 .npy", "GET", f"/stac/preview.npy?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16&max_size=64", None, "npy"),
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16", None, "point"),
+                ("PARITY W83 MIXED-INT STAC u16+i16->i32 GET /statistics", "GET", f"/stac/statistics?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16", None, "stats"),
+                ("PARITY W83 MIXED-INT STAC u16+i16 expr viridis .png", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w83_stac_u16_i16'])}&assets=u16&assets=i16&expression={qe('b1+b2')}&rescale=15000,70000&colormap_name=viridis", None, "png"),
+                ("PARITY W83 #671 HOLE-MASK bilinear tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w83_u16'])}&resampling=bilinear&rescale=40000,60000&colormap_name=viridis", None, "png"),
+                ("PARITY W83 #671 HOLE-MASK cubic tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w83_u16'])}&resampling=cubic&rescale=40000,60000&colormap_name=viridis", None, "png"),
+                ("PARITY W83 #671 HOLE-MASK cubic_spline tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w83_u16'])}&resampling=cubic_spline&rescale=40000,60000&colormap_name=viridis", None, "png"),
+                ("PARITY W83 #671 HOLE-MASK lanczos tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w83_u16'])}&resampling=lanczos&rescale=40000,60000&colormap_name=viridis", None, "png"),
+                ("PARITY W83 #671 HOLE-MASK bilinear /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w83_u16'])}&resampling=bilinear&rescale=40000,60000&colormap_name=viridis", None, "png"),
+                ("PARITY W83 #671 HOLE-MASK lanczos /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w83_u16'])}&resampling=lanczos&rescale=40000,60000&colormap_name=viridis", None, "png"),
+                ("BETTER W83 #671 HOLE-MASK cubic_spline /bbox (cw 3807 no bloat, tt 3886)", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w83_u16'])}&resampling=cubic_spline&rescale=40000,60000&colormap_name=viridis", None, "better_w83_cubic_spline_bbox_hole"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7937,6 +7991,18 @@ def main() -> int:
                             hc, ht = jc["b1"]["histogram"], jt["b1"]["histogram"]
                             ok = len(hc[0]) == 5 and len(ht[0]) == 5 and max(abs(a - b) for a, b in zip(hc[1], ht[1])) < 1e-4
                             detail += f" bins={len(hc[0])} edges=[{hc[1][0]}..{hc[1][-1]}]"
+                    elif kind == "better_w83_cubic_spline_bbox_hole":
+                        ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
+                        at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
+                        mc, mt = ac[:, :, 3] > 0, at[:, :, 3] > 0
+                        both = mc & mt
+                        mae = float(np.abs(ac[both, :3].astype(float) - at[both, :3].astype(float)).mean()) if both.any() else 999.0
+                        cw_v, tt_v = int(mc.sum()), int(mt.sum())
+                        only_tt = int((mt & ~mc).sum())
+                        # True nearest hole leaves 3790 valid; cogzilla #671 keeps 3807 across all smoothing kernels,
+                        # whereas GDAL same-CRS RasterIO cubic_spline smears 79 extra pixels into the nodata hole (3886).
+                        ok = ac.shape == (64, 64, 4) and cw_v == 3807 and tt_v > 3870 and only_tt >= 70 and mae < 0.5
+                        detail = f"cw_valid={cw_v} tt_valid={tt_v} tt_hole_bloat={only_tt} shared_MAE={mae:.2f}"
                     elif kind == "better_w81_semitrans_stats":
                         jc, jt = r_cw.json(), r_tt.json()
                         bc, bt = jc["b1"], jt["b1"]
