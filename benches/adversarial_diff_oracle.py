@@ -5931,6 +5931,17 @@ def main() -> int:
                 ("PARITY W60 BBOX 2:1 width=80 auto-height .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.75.npy?url={q(s['w60_wide_4to1'])}&width=80", None, "npy"),
                 ("PARITY W60 FEATURE 3:1 unsized max_size=64 .npy", "POST", f"/cog/feature.npy?url={q(s['w60_wide_4to1'])}&max_size=64", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.65], [-122.05, 37.65], [-122.05, 37.78], [-122.45, 37.78], [-122.45, 37.65]]]}}, "npy"),
                 ("PARITY W60 FEATURE 3:1 height=32 auto-width .npy", "POST", f"/cog/feature.npy?url={q(s['w60_wide_4to1'])}&height=32", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.65], [-122.05, 37.65], [-122.05, 37.78], [-122.45, 37.78], [-122.45, 37.65]]]}}, "npy"),
+                # --- Wave 61: GeoTIFF (.tif) unscale/expr/bbox/feature/preview/RGB parity & WebP alpha transparency ---
+                ("PARITY W61 GEOTIFF tile unscale=true .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w53_neg_scale'])}&unscale=true", None, "geotiff"),
+                ("PARITY W61 GEOTIFF tile expr .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w43_rgb_nodata'])}&expression={qe('(b2-b1)/(b2+b1+100)')}", None, "geotiff"),
+                ("PARITY W61 GEOTIFF tile f32 internal-mask bilinear .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w55_f32_imask'])}&resampling=bilinear", None, "geotiff"),
+                ("PARITY W61 GEOTIFF GET /bbox 64x64.tif", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.tif?url={q(s['w60_wide_4to1'])}", None, "geotiff"),
+                ("PARITY W61 GEOTIFF GET /bbox dst_crs=3857 64x64.tif", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.tif?url={q(s['w60_wide_4to1'])}&dst_crs=EPSG:3857", None, "geotiff"),
+                ("PARITY W61 GEOTIFF POST /feature donut 64x64.tif", "POST", f"/cog/feature/64x64.tif?url={q(s['w50_donut'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "geotiff"),
+                ("PARITY W61 WEBP tile viridis + nodata hole .webp", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.webp?url={q(s['w55_f32_imask'])}&rescale=10,300&colormap_name=viridis", None, "png"),
+                ("PARITY W61 WEBP POST /feature donut 64x64.webp", "POST", f"/cog/feature/64x64.webp?url={q(s['w50_donut'])}&rescale=0,150&colormap_name=viridis", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "png"),
+                ("PARITY W61 GEOTIFF GET /preview 64x32.tif", "GET", f"/cog/preview/64x32.tif?url={q(s['w60_wide_4to1'])}", None, "geotiff"),
+                ("PARITY W61 GEOTIFF tile 3-band RGB uint8 .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w43_rgb_nodata'])}", None, "geotiff"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
