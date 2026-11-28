@@ -4501,7 +4501,7 @@ impl BandAlgorithm {
                 z: number("z_exaggeration", 1.0),
             },
             AlgorithmId::Aspect => Self::Aspect {
-                buffer: number("buffer", 0.0) as usize,
+                buffer: number("buffer", 3.0) as usize,
                 z: number("z_exaggeration", 1.0),
             },
             AlgorithmId::Contours => Self::Contours {
