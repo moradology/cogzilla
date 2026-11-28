@@ -2074,6 +2074,40 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     }))
     out["w77_stac_dem"] = p_w77_stac_dem
 
+    # Wave 78: 10-band Sentinel-2-like uint16 COG (b1..b10, scale=0.0001, offset=-0.1, nodata=0)
+    # Exercises two-digit band indices (b10) in expressions, 11-band GeoTIFF out-of-line IFD tags,
+    # 10-band /point & GET/POST /statistics, and STAC pipe s2|bidx=10,8,4 & s2|expression=(b10-b4)/(b10+b4)
+    p_w78_s2 = synth_dir / "w78_s2_10band_u16.tif"
+    s2_10 = np.stack([
+        (1200 + bi * 350 + xx9 * (5 + bi) + yy9 * (3 + (bi % 4))).astype(np.uint16)
+        for bi in range(10)
+    ])
+    s2_10[:, 75:95, 60:80] = 0
+    with rasterio.open(
+        p_w78_s2, "w", driver="GTiff", width=128, height=128, count=10, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=2, nodata=0,
+    ) as ds:
+        ds.write(s2_10)
+        ds.scales = (0.0001,) * 10
+        ds.offsets = (-0.1,) * 10
+    out["w78_s2_10band_u16"] = p_w78_s2
+
+    p_w78_stac = synth_dir / "w78_stac_s2.json"
+    p_w78_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w78-s2-10band",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "s2": {"href": str(p_w78_s2), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w78_stac_s2"] = p_w78_stac
+
     return out
 
 
@@ -6686,6 +6720,19 @@ def main() -> int:
                 ("PARITY W77 STAC /bbox unscale=true viridis 64x64.webp", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.webp?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&rescale=-900,600&colormap_name=viridis", None, "png"),
                 ("PARITY W77 STAC POST /feature unscale=true viridis 64x64.jpg", "POST", f"/stac/feature/64x64.jpg?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&rescale=-900,600&colormap_name=viridis", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.75], [-122.05, 37.75], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.75]]]}}, "png"),
                 ("PARITY W77 COG /preview unscale=true viridis 64x64.webp", "GET", f"/cog/preview/64x64.webp?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&rescale=-1400,1100&colormap_name=viridis", None, "png"),
+                # --- Wave 78: 10-band Sentinel-2-like uint16 COG (two-digit b10 expressions, 11-band GeoTIFF IFD, 10-band stats/point, STAC pipe b10) ---
+                ("PARITY W78 10-BAND bidx=10 single band tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_s2_10band_u16'])}&bidx=10&unscale=true", None, "npy"),
+                ("PARITY W78 10-BAND bidx=10,8,4 false-color + CF .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w78_s2_10band_u16'])}&bidx=10&bidx=8&bidx=4&unscale=true&rescale=0,0.8&color_formula={qe('Gamma RGB 1.2')}", None, "png"),
+                ("PARITY W78 10-BAND expr two-digit (b10-b4)/(b10+b4) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_s2_10band_u16'])}&unscale=true&expression={qe('(b10-b4)/(b10+b4)')}", None, "npy"),
+                ("PARITY W78 10-BAND multi-expr b10;b8;b4 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_s2_10band_u16'])}&unscale=true&expression={qe('b10;b8;b4')}", None, "npy"),
+                ("PARITY W78 10-BAND full 11-band GeoTIFF tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w78_s2_10band_u16'])}", None, "geotiff"),
+                ("PARITY W78 10-BAND /cog/point all 10 bands unscale=true", "GET", f"/cog/point/-122.25,37.75?url={q(s['w78_s2_10band_u16'])}&unscale=true", None, "point"),
+                ("PARITY W78 10-BAND GET /cog/statistics all 10 bands", "GET", f"/cog/statistics?url={q(s['w78_s2_10band_u16'])}&unscale=true", None, "stats"),
+                ("PARITY W78 10-BAND POST /cog/statistics all 10 bands", "POST", f"/cog/statistics?url={q(s['w78_s2_10band_u16'])}&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W78 10-BAND /cog/info.geojson", "GET", f"/cog/info.geojson?url={q(s['w78_s2_10band_u16'])}", None, "info_geojson_w23"),
+                ("PARITY W78 10-BAND STAC pipe s2|bidx=10,8,4 unscale .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_stac_s2'])}&assets={qe('s2|bidx=10,8,4')}&unscale=true", None, "npy"),
+                ("PARITY W78 10-BAND STAC pipe s2|expression=(b10-b4)/(b10+b4) .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_stac_s2'])}&assets={qe('s2|expression=(b10-b4)/(b10+b4)')}&unscale=true", None, "npy"),
+                ("PARITY W78 10-BAND STAC pipe s2|bidx=10 /point unscale", "GET", f"/stac/point/-122.25,37.75?url={q(s['w78_stac_s2'])}&assets={qe('s2|bidx=10')}&unscale=true", None, "point"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
