@@ -1722,6 +1722,20 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     assert struct.unpack("<H", p_w59_bt.read_bytes()[2:4])[0] == 43, "w59_bigtiff_f64_ovr must be BigTIFF (version 43)"
     out["w59_bigtiff_f64_ovr"] = p_w59_bt
 
+    # Wave 60: Non-square 4:1 wide (256x64) float32 COG for preview/bbox/feature aspect-ratio sizing & max_size=0
+    p_w60_wide = synth_dir / "w60_wide_4to1.tif"
+    yy60, xx60 = np.mgrid[0:64, 0:256]
+    f32_60 = (20.0 + xx60 * 0.8 + yy60 * 2.5).astype(np.float32)
+    f32_60[20:44, 100:150] = -9999.0
+    tf_w60 = from_bounds(-122.5, 37.5, -122.0, 38.0, 256, 64)
+    with rasterio.open(
+        p_w60_wide, "w", driver="GTiff", width=256, height=64, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w60, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_60, 1)
+    out["w60_wide_4to1"] = p_w60_wide
+
     return out
 
 
@@ -5906,6 +5920,17 @@ def main() -> int:
                 ("PARITY W59 STRIP-13 f32 ZSTD P3 /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w59_strip13_f32_p3'])}", None, "point"),
                 ("PARITY W59 BIGTIFF f64 P3 base z10 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_bigtiff_f64_ovr'])}", None, "npy_f64_exact"),
                 ("PARITY W59 BIGTIFF f64 P3 ovr z8 .npy", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.npy?url={q(s['w59_bigtiff_f64_ovr'])}", None, "npy_f64_exact"),
+                # --- Wave 60: Fractional buffer=0.5/1.5, non-square 4:1 preview/bbox/feature max_size=0/64 & single-axis width/height ---
+                ("PARITY W60 FRAC-BUFFER buffer=0.5 .npy (257x257)", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.npy?url={q(merc)}&buffer=0.5", None, "npy"),
+                ("PARITY W60 FRAC-BUFFER buffer=1.5 bilinear .png (259x259)", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.png?url={q(merc)}&buffer=1.5&resampling=bilinear&rescale=0,1000&colormap_name=viridis", None, "png"),
+                ("PARITY W60 PREVIEW 4:1 max_size=64 .npy (64x16)", "GET", f"/cog/preview.npy?url={q(s['w60_wide_4to1'])}&max_size=64", None, "npy"),
+                ("PARITY W60 PREVIEW 4:1 max_size=0 native .npy (256x64)", "GET", f"/cog/preview.npy?url={q(s['w60_wide_4to1'])}&max_size=0", None, "npy"),
+                ("PARITY W60 PREVIEW 4:1 width=80 auto-height .npy", "GET", f"/cog/preview.npy?url={q(s['w60_wide_4to1'])}&width=80", None, "npy"),
+                ("PARITY W60 PREVIEW 4:1 height=32 auto-width .png", "GET", f"/cog/preview.png?url={q(s['w60_wide_4to1'])}&height=32&rescale=20,400&colormap_name=viridis", None, "png"),
+                ("PARITY W60 BBOX 2:1 unsized max_size=64 .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.75.npy?url={q(s['w60_wide_4to1'])}&max_size=64", None, "npy"),
+                ("PARITY W60 BBOX 2:1 width=80 auto-height .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.75.npy?url={q(s['w60_wide_4to1'])}&width=80", None, "npy"),
+                ("PARITY W60 FEATURE 3:1 unsized max_size=64 .npy", "POST", f"/cog/feature.npy?url={q(s['w60_wide_4to1'])}&max_size=64", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.65], [-122.05, 37.65], [-122.05, 37.78], [-122.45, 37.78], [-122.45, 37.65]]]}}, "npy"),
+                ("PARITY W60 FEATURE 3:1 height=32 auto-width .npy", "POST", f"/cog/feature.npy?url={q(s['w60_wide_4to1'])}&height=32", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.65], [-122.05, 37.65], [-122.05, 37.78], [-122.45, 37.78], [-122.45, 37.65]]]}}, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---

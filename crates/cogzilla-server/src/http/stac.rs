@@ -1657,8 +1657,7 @@ where
             let cf = pq_stac.parse_color_formula()?;
             let (data, out_bbox, out_w, out_h, out_epsg) = if let Some((ref dst_crs, dst_epsg)) = pq_stac.dst_crs {
                 let dst_bbox = reproject_wgs84_bounds(bbox, dst_crs)?;
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], dst_crs, bbox, dst_bbox, pq_stac.max_size);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], dst_crs, bbox, dst_bbox, pq_stac.max_size, pq_stac.width, pq_stac.height);
                 let rs = resolve_resample(Some(&engine), &pq_stac, Some(&cogs[0]), dst_epsg);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), dst_bbox, dst_crs, false, out_w, out_h, None, &bands,
@@ -1833,8 +1832,7 @@ where
                 } else {
                     reproject_wgs84_bounds(wgs_bbox_src, &dst_crs)?
                 };
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], &dst_crs, wgs_bbox_src, dst_bbox, bbox_max);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], &dst_crs, wgs_bbox_src, dst_bbox, bbox_max, pq_stac.width, pq_stac.height);
                 let resample = resolve_resample(Some(&engine), &pq_stac, Some(&cogs[0]), dst_epsg);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), dst_bbox, &dst_crs, false, out_w, out_h, None, &bands, resample, fmt,
@@ -1848,8 +1846,7 @@ where
                 } else {
                     reproject_wgs84_bounds(wgs_bbox_src, dst_crs)?
                 };
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], dst_crs, wgs_bbox_src, dst_bbox, bbox_max);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], dst_crs, wgs_bbox_src, dst_bbox, bbox_max, pq_stac.width, pq_stac.height);
                 let resample = resolve_resample(Some(&engine), &pq_stac, Some(&cogs[0]), dst_epsg);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), dst_bbox, dst_crs, false, out_w, out_h, None, &bands, resample, fmt,
@@ -1858,8 +1855,7 @@ where
                 .await?;
                 (d, dst_bbox, out_w, out_h, dst_epsg)
             } else if pq_stac.coord_crs_3857 {
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], &cogzilla_proj::CrsModel::Epsg3857, wgs_bbox_src, bbox, bbox_max);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], &cogzilla_proj::CrsModel::Epsg3857, wgs_bbox_src, bbox, bbox_max, pq_stac.width, pq_stac.height);
                 let resample = resolve_resample(Some(&engine), &pq_stac, Some(&cogs[0]), 3857);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), bbox, &cogzilla_proj::CrsModel::Epsg3857, false, out_w, out_h, None, &bands, resample, fmt,
@@ -1868,8 +1864,7 @@ where
                 .await?;
                 (d, bbox, out_w, out_h, 3857u16)
             } else {
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], &cogzilla_proj::CrsModel::Geographic, wgs_bbox_src, wgs_bbox_src, bbox_max);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], &cogzilla_proj::CrsModel::Geographic, wgs_bbox_src, wgs_bbox_src, bbox_max, pq_stac.width, pq_stac.height);
                 let resample = resolve_resample(Some(&engine), &pq_stac, Some(&cogs[0]), 4326);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), wgs_bbox_src, &cogzilla_proj::CrsModel::Geographic, false, out_w, out_h, None, &bands, resample, fmt,
@@ -2065,8 +2060,7 @@ where
             let mask_opt = pq_stac.shape_mask.then_some(&mask);
             let (data, out_bbox, out_w, out_h, out_epsg) = if let Some((ref dst_crs, dst_epsg)) = eff_dst {
                 let dst_bbox = reproject_wgs84_bounds(bbox, dst_crs)?;
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], dst_crs, bbox, dst_bbox, s);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], dst_crs, bbox, dst_bbox, s, pq_stac.width, pq_stac.height);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), dst_bbox, dst_crs, false, out_w, out_h, mask_opt, &bands, resample, fmt,
                     pq_stac.nodata, custom_lut.as_ref(), cf.as_ref(), pq_stac.return_mask, pq_stac.unscale,
@@ -2074,8 +2068,7 @@ where
                 .await?;
                 (d, dst_bbox, out_w, out_h, dst_epsg)
             } else {
-                let (def_w, def_h) = capped_native_bbox_dims(&engine, &cogs[0], &cogzilla_proj::CrsModel::Geographic, bbox, bbox, s);
-                let (out_w, out_h) = resolve_query_dims(def_w, def_h, pq_stac.width, pq_stac.height);
+                let (out_w, out_h) = resolve_bbox_query_dims(&engine, &cogs[0], &cogzilla_proj::CrsModel::Geographic, bbox, bbox, s, pq_stac.width, pq_stac.height);
                 let d = render_stac_bbox_opt(
                     &engine, &cogs, slot_bands.as_deref(), bbox, &cogzilla_proj::CrsModel::Geographic, false, out_w, out_h, mask_opt, &bands, resample, fmt,
                     pq_stac.nodata, custom_lut.as_ref(), cf.as_ref(), pq_stac.return_mask, pq_stac.unscale,
