@@ -2162,6 +2162,69 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
     out["w79_rgba_u16"] = p_w79_rgba16
 
+    # Wave 80: Planar-separate (INTERLEAVE=BAND) alpha channels (4-band u8, 4-band u16, 2-band Gray+Alpha u16)
+    p_w80_planar_rgba8 = synth_dir / "w80_planar_rgba_u8.tif"
+    rgba8_w80 = np.stack([
+        (30 + xx9 * 1.2).clip(0, 255).astype(np.uint8),
+        (50 + yy9 * 1.1).clip(0, 255).astype(np.uint8),
+        (20 + (xx9 + yy9) * 0.7).clip(0, 255).astype(np.uint8),
+        alpha79,
+    ])
+    with rasterio.open(
+        p_w80_planar_rgba8, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_w80)
+    with rasterio.open(p_w80_planar_rgba8) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w80_planar_rgba_u8"] = p_w80_planar_rgba8
+
+    p_w80_planar_rgba16 = synth_dir / "w80_planar_rgba_u16.tif"
+    with rasterio.open(
+        p_w80_planar_rgba16, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", predictor=2, photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba16)
+    with rasterio.open(p_w80_planar_rgba16) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w80_planar_rgba_u16"] = p_w80_planar_rgba16
+
+    p_w80_planar_ga16 = synth_dir / "w80_planar_gray_alpha_u16.tif"
+    ga16_w80 = np.stack([
+        (500 + xx9 * 30 + yy9 * 12).astype(np.uint16),
+        alpha16,
+    ])
+    with rasterio.open(
+        p_w80_planar_ga16, "w", driver="GTiff", width=128, height=128, count=2, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", predictor=2, photometric="MINISBLACK",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.gray,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(ga16_w80)
+    with rasterio.open(p_w80_planar_ga16) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
+        assert ds.colorinterp[1] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 2, got {ds.colorinterp}"
+    out["w80_planar_gray_alpha_u16"] = p_w80_planar_ga16
+
     return out
 
 
@@ -6801,6 +6864,20 @@ def main() -> int:
                 ("PARITY W79 RGBA-U16 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w79_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "png"),
                 ("PARITY W79 RGBA-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w79_rgba_u16'])}", None, "stats"),
                 ("PARITY W79 RGBA-U16 /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w79_rgba_u16'])}", None, "point"),
+                # --- Wave 80: Planar-separate (INTERLEAVE=BAND) alpha channels (4-band u8/u16 & 2-band Gray+Alpha u16) ---
+                ("PARITY W80 PLANAR-RGBA-U8 tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w80_planar_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W80 PLANAR-RGBA-U8 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w80_planar_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("PARITY W80 PLANAR-RGBA-U8 tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w80_planar_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "geotiff"),
+                ("PARITY W80 PLANAR-RGBA-U8 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w80_planar_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W80 PLANAR-RGBA-U8 /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w80_planar_rgba_u8'])}", None, "point"),
+                ("PARITY W80 PLANAR-RGBA-U8 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w80_planar_rgba_u8'])}", None, "stats"),
+                ("PARITY W80 PLANAR-RGBA-U8 POST /cog/statistics", "POST", f"/cog/statistics?url={q(s['w80_planar_rgba_u8'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W80 PLANAR-RGBA-U16 tile .png (rescale 0..6000)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w80_planar_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "png"),
+                ("PARITY W80 PLANAR-RGBA-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w80_planar_rgba_u16'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("PARITY W80 PLANAR-RGBA-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w80_planar_rgba_u16'])}", None, "stats"),
+                ("PARITY W80 PLANAR-GRAY-ALPHA-U16 tile .png (viridis)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w80_planar_gray_alpha_u16'])}&bidx=1&rescale=0,6000&colormap_name=viridis", None, "png"),
+                ("PARITY W80 PLANAR-GRAY-ALPHA-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w80_planar_gray_alpha_u16'])}&bidx=1", None, "npy"),
+                ("PARITY W80 PLANAR-GRAY-ALPHA-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w80_planar_gray_alpha_u16'])}", None, "stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
