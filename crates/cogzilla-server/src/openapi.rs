@@ -522,9 +522,9 @@ fn add_family_routes(
         sp.extend(stats_params());
         let mut post_sp = sp.clone();
         post_sp.push(q_str("coord_crs", false, "CRS of incoming GeoJSON geometry"));
-        post_sp.push(q_bool("area_weighted", false, "Weight statistics by ellipsoidal pixel ground area (default true)"));
-        post_sp.push(q_int("cover_scale", "Accepted for TiTiler compatibility (ignored; exact analytical coverage needs no supersampling)"));
-        post_sp.push(q_bool("all_touched", false, "Accepted for compatibility (ignored; exact analytical coverage weights all touched pixels)"));
+        post_sp.push(q_bool("area_weighted", false, "Weight statistics by exact WGS84 ellipsoidal pixel ground area (default true; pass area_weighted=false for unweighted CRS-plane TiTiler parity)"));
+        post_sp.push(q_int("cover_scale", "Accepted for TiTiler compatibility (no-op; exact analytical coverage needs no supersampling)"));
+        post_sp.push(q_bool("all_touched", false, "Accepted for TiTiler compatibility (no-op; exact analytical sub-pixel coverage already includes every touched pixel without binary overcounting)"));
         paths.insert(
             format!("{prefix}/statistics"),
             json!({
