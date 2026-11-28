@@ -1603,6 +1603,66 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.offsets = (0.0, -1.0, 10.0)
     out["w57_perband_scale_3b"] = p_w57_pb_sc
 
+    # Wave 58: Planar-separate (INTERLEAVE=BAND) asymmetric sparse TIFFs (with & without nodata),
+    # sparse nodata=0 TIFF with ?nodata=999 override, and float32 -0.0 vs nodata=0.0
+    p_w58_pl_nd = synth_dir / "w58_planar_sparse_nd.tif"
+    with rasterio.open(
+        p_w58_pl_nd, "w", driver="GTiff", width=128, height=128, count=3, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", nodata=-9999.0, SPARSE_OK="TRUE",
+    ) as ds:
+        w_tl = rasterio.windows.Window(0, 0, 64, 64)
+        w_tr = rasterio.windows.Window(64, 0, 64, 64)
+        w_bl = rasterio.windows.Window(0, 64, 64, 64)
+        w_br = rasterio.windows.Window(64, 64, 64, 64)
+        blk1 = (10.0 + xx57q * 1.0 + yy57q * 0.5).astype(np.float32)
+        blk2 = (50.0 + xx57q * 0.8 + yy57q * 1.2).astype(np.float32)
+        blk3 = (90.0 + xx57q * 0.6 + yy57q * 0.9).astype(np.float32)
+        # Band 1: TL + BR; Band 2: TL + TR + BR; Band 3: TL + BL + BR (asymmetric sparsity per band!)
+        ds.write(blk1, 1, window=w_tl); ds.write(blk1 + 20.0, 1, window=w_br)
+        ds.write(blk2, 2, window=w_tl); ds.write(blk2 + 10.0, 2, window=w_tr); ds.write(blk2 + 20.0, 2, window=w_br)
+        ds.write(blk3, 3, window=w_tl); ds.write(blk3 + 15.0, 3, window=w_bl); ds.write(blk3 + 25.0, 3, window=w_br)
+    out["w58_planar_sparse_nd"] = p_w58_pl_nd
+
+    p_w58_pl_nond = synth_dir / "w58_planar_sparse_no_nd.tif"
+    with rasterio.open(
+        p_w58_pl_nond, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", SPARSE_OK="TRUE",
+    ) as ds:
+        ub1 = (100 + xx57q.astype(np.uint32) * 5).astype(np.uint16)
+        ub2 = (200 + yy57q.astype(np.uint32) * 6).astype(np.uint16)
+        ub3 = (300 + (xx57q + yy57q).astype(np.uint32) * 3).astype(np.uint16)
+        ds.write(ub1, 1, window=w_tl); ds.write(ub1 + 50, 1, window=w_br)
+        ds.write(ub2, 2, window=w_tl); ds.write(ub2 + 30, 2, window=w_tr); ds.write(ub2 + 60, 2, window=w_br)
+        ds.write(ub3, 3, window=w_tl); ds.write(ub3 + 40, 3, window=w_bl); ds.write(ub3 + 80, 3, window=w_br)
+    out["w58_planar_sparse_no_nd"] = p_w58_pl_nond
+
+    p_w58_sp_nd0 = synth_dir / "w58_sparse_nd0.tif"
+    with rasterio.open(
+        p_w58_sp_nd0, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0, SPARSE_OK="TRUE",
+    ) as ds:
+        tl58 = (100 + xx57q.astype(np.uint32) * 4 + yy57q.astype(np.uint32) * 3).astype(np.uint16)
+        br58 = (200 + xx57q.astype(np.uint32) * 5 + yy57q.astype(np.uint32) * 4).astype(np.uint16)
+        br58[15:40, 15:40] = 999
+        ds.write(tl58, 1, window=w_tl)
+        ds.write(br58, 1, window=w_br)
+    out["w58_sparse_nd0"] = p_w58_sp_nd0
+
+    p_w58_neg0 = synth_dir / "w58_neg_zero_f32.tif"
+    f32_58 = (10.0 + xx9 * 1.2 + yy9 * 0.8).astype(np.float32)
+    f32_58[75:95, 55:75] = np.float32(-0.0)
+    f32_58[95:115, 75:95] = np.float32(0.0)
+    with rasterio.open(
+        p_w58_neg0, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0.0,
+    ) as ds:
+        ds.write(f32_58, 1)
+    out["w58_neg_zero_f32"] = p_w58_neg0
+
     return out
 
 
@@ -5763,6 +5823,19 @@ def main() -> int:
                 ("PARITY W57 PER-BAND scale/offset 3b unscale+expr .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w57_perband_scale_3b'])}&unscale=true&expression={qe('(b3-b2)/(b1+1)')}", None, "npy"),
                 ("PARITY W57 PER-BAND scale/offset 3b unscale /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w57_perband_scale_3b'])}&unscale=true", None, "point"),
                 ("PARITY W57 PER-BAND scale/offset 3b unscale /statistics", "GET", f"/cog/statistics?url={q(s['w57_perband_scale_3b'])}&unscale=true", None, "stats"),
+                # --- Wave 58: Planar-separate asymmetric sparse TIFFs, sparse nodata=0 + ?nodata=999 override, float32 -0.0 vs nodata=0.0 ---
+                ("PARITY W58 PLANAR SPARSE nodata=-9999 bidx=3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_planar_sparse_nd'])}&bidx=3", None, "npy"),
+                ("PARITY W58 PLANAR SPARSE nodata=-9999 expr b1+b2+b3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_planar_sparse_nd'])}&expression={qe('b1+b2+b3')}", None, "npy"),
+                ("PARITY W58 PLANAR SPARSE nodata=-9999 /point asym BL", "GET", f"/cog/point/-122.40,37.60?url={q(s['w58_planar_sparse_nd'])}", None, "point"),
+                ("PARITY W58 PLANAR SPARSE nodata=-9999 /statistics", "GET", f"/cog/statistics?url={q(s['w58_planar_sparse_nd'])}", None, "stats"),
+                ("PARITY W58 PLANAR SPARSE no-nodata (valid 0s) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_planar_sparse_no_nd'])}", None, "npy"),
+                ("PARITY W58 PLANAR SPARSE no-nodata (valid 0s) /statistics", "GET", f"/cog/statistics?url={q(s['w58_planar_sparse_no_nd'])}", None, "stats"),
+                ("PARITY W58 SPARSE nd=0 ?nodata=999 override .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_sparse_nd0'])}&nodata=999", None, "npy"),
+                ("PARITY W58 SPARSE nd=0 ?nodata=999 override .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w58_sparse_nd0'])}&nodata=999&rescale=0,800&colormap_name=viridis", None, "png"),
+                ("PARITY W58 SPARSE nd=0 ?nodata=999 /point sparse BL", "GET", f"/cog/point/-122.40,37.60?url={q(s['w58_sparse_nd0'])}&nodata=999", None, "point"),
+                ("PARITY W58 SPARSE nd=0 ?nodata=999 /statistics", "GET", f"/cog/statistics?url={q(s['w58_sparse_nd0'])}&nodata=999", None, "stats"),
+                ("PARITY W58 NEG-ZERO -0.0 vs nodata=0.0 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_neg_zero_f32'])}", None, "npy"),
+                ("PARITY W58 NEG-ZERO -0.0 vs nodata=0.0 /statistics", "GET", f"/cog/statistics?url={q(s['w58_neg_zero_f32'])}", None, "stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
