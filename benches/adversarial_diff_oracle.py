@@ -1806,6 +1806,89 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     }))
     out["w66_stac_hetero"] = p_w66_stac
 
+    # Wave 67: STAC unscale=true with heterogeneous per-asset & per-band (scale, offset) + sub-byte NBITS=12/4 with nodata
+    tf_w67 = from_bounds(-122.6, 37.4, -121.9, 38.1, 128, 128)
+    p_w67_red = synth_dir / "w67_red_scaled_u16.tif"
+    u16_67_r = (2000 + xx9 * 25 + yy9 * 15).astype(np.uint16)
+    u16_67_r[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w67_red, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_67_r, 1)
+        ds.scales = (0.0001,)
+        ds.offsets = (-0.1,)
+
+    p_w67_nir = synth_dir / "w67_nir_scaled_u16.tif"
+    u16_67_n = (3000 + xx9 * 30 + yy9 * 20).astype(np.uint16)
+    u16_67_n[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w67_nir, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_67_n, 1)
+        ds.scales = (0.0002,)
+        ds.offsets = (0.05,)
+
+    p_w67_ms = synth_dir / "w67_ms_hetero_scale_u16.tif"
+    u16_67_ms = np.stack([
+        (1000 + xx9 * 10 + yy9 * 5).astype(np.uint16),
+        (2000 + xx9 * 15 + yy9 * 10).astype(np.uint16),
+        (4000 + xx9 * 20 + yy9 * 15).astype(np.uint16),
+    ])
+    u16_67_ms[:, 75:95, 60:80] = 0
+    with rasterio.open(
+        p_w67_ms, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_67_ms)
+        ds.scales = (0.01, 0.001, -0.005)
+        ds.offsets = (1.0, -2.0, 50.0)
+
+    p_w67_stac = synth_dir / "w67_stac_scaled.json"
+    p_w67_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w67-scaled-assets",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "red": {"href": str(p_w67_red), "type": "image/tiff; application=geotiff"},
+            "nir": {"href": str(p_w67_nir), "type": "image/tiff; application=geotiff"},
+            "ms": {"href": str(p_w67_ms), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w67_stac_scaled"] = p_w67_stac
+
+    p_w67_nb12 = synth_dir / "w67_nbits12_nodata_scaled.tif"
+    u16_nb12 = (200 + xx9 * 18 + yy9 * 12).astype(np.uint16)
+    u16_nb12[75:95, 60:80] = 4095
+    with rasterio.open(
+        p_w67_nb12, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nbits=12, nodata=4095,
+    ) as ds:
+        ds.write(u16_nb12, 1)
+        ds.scales = (0.001,)
+        ds.offsets = (-0.5,)
+    out["w67_nbits12_nodata_scaled"] = p_w67_nb12
+
+    p_w67_nb4 = synth_dir / "w67_nbits4_nodata.tif"
+    u8_nb4 = ((xx9 // 10 + yy9 // 20) % 15).astype(np.uint8)
+    u8_nb4[75:95, 60:80] = 15
+    with rasterio.open(
+        p_w67_nb4, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nbits=4, nodata=15,
+    ) as ds:
+        ds.write(u8_nb4, 1)
+    out["w67_nbits4_nodata"] = p_w67_nb4
+
     return out
 
 
@@ -6087,6 +6170,20 @@ def main() -> int:
                 ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir /statistics", "GET", f"/stac/statistics?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "stats"),
                 ("PARITY W66 BBOX resampling=average f32+hole 32x32.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/32x32.npy?url={q(s['w55_f32_imask'])}&resampling=average", None, "npy"),
                 ("PARITY W66 BBOX resampling=mode cat u8 32x32.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/32x32.npy?url={q(s['w23_cat_u8'])}&resampling=mode", None, "npy"),
+                # --- Wave 67: STAC unscale=true hetero scale+offset + pipe |bidx=3,1 + expression, & NBITS=12/4 + nodata + smooth/unscale ---
+                ("PARITY W67 STAC unscale=true hetero red+nir .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "npy"),
+                ("PARITY W67 STAC unscale=true hetero red+nir /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "point"),
+                ("PARITY W67 STAC unscale=true hetero red+nir GET /statistics", "GET", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "stats"),
+                ("PARITY W67 STAC unscale=true hetero red+nir POST /statistics", "POST", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W67 STAC unscale=true hetero red+nir /bbox .npy", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "npy"),
+                ("PARITY W67 STAC unscale=true hetero red+nir POST /feature .npy", "POST", f"/stac/feature/64x64.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "npy"),
+                ("PARITY W67 STAC unscale=true + expr NDVI red+nir .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&expression={qe('(b2-b1)/(b2+b1)')}", None, "npy"),
+                ("PARITY W67 STAC unscale=true + inline expr ms .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets={qe('ms|expression=(b3-b1)/(b3+b1)')}&unscale=true", None, "npy"),
+                ("PARITY W67 STAC unscale=true + pipe ms|bidx=3,1 .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets={qe('ms|bidx=3,1')}&unscale=true", None, "npy"),
+                ("PARITY W67 NBITS=12 nodata=4095 resampling=bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&resampling=bilinear", None, "npy"),
+                ("PARITY W67 NBITS=12 nodata=4095 unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&unscale=true", None, "npy"),
+                ("PARITY W67 NBITS=12 nodata=4095 GET /statistics", "GET", f"/cog/statistics?url={q(s['w67_nbits12_nodata_scaled'])}", None, "stats"),
+                ("PARITY W67 NBITS=4 nodata=15 resampling=cubic .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits4_nodata'])}&resampling=cubic", None, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
