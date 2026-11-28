@@ -201,9 +201,15 @@ fn widened_accumulate_fixed_nan<const K: usize>(
 }
 
 /// Sum of `w[i] * value` over the valid taps of the `wx.len() x wy.len()` footprint at `(x0, y0)`,
-/// with the valid and total weights: `(sum, valid_weight, total_weight)`.
+/// with the valid, full-kernel, and in-raster weights: `(sum, valid_weight, total_weight, in_raster_weight)`.
 #[inline(always)]
-fn widened_accumulate(src: &BandSource<'_>, x0: i32, wx: &[f32], y0: i32, wy: &[f32]) -> (f32, f32, f32) {
+fn widened_accumulate(
+    src: &BandSource<'_>,
+    x0: i32,
+    wx: &[f32],
+    y0: i32,
+    wy: &[f32],
+) -> (f32, f32, f32, f32) {
     let nx = wx.len();
     let ny = wy.len();
     let wxs: f32 = wx.iter().sum();
@@ -221,7 +227,7 @@ fn widened_accumulate(src: &BandSource<'_>, x0: i32, wx: &[f32], y0: i32, wy: &[
             } else {
                 widened_accumulate_fixed::<8>(sl, base, stride, wx, wy)
             };
-            return (acc, wtot, wtot);
+            return (acc, wtot, wtot, wtot);
         }
     }
     let block = src.rect_in_block(x0, y0, nx as u32, ny as u32);
@@ -247,7 +253,7 @@ fn widened_accumulate(src: &BandSource<'_>, x0: i32, wx: &[f32], y0: i32, wy: &[
             sum += rs * wyj;
             wsum += rw * wyj;
         }
-        return (sum, wsum, wtot);
+        return (sum, wsum, wtot, wtot);
     }
     if let Some((band, base, stride)) = block
         && src.no_nodata
@@ -272,12 +278,26 @@ fn widened_accumulate(src: &BandSource<'_>, x0: i32, wx: &[f32], y0: i32, wy: &[
                 acc += r * wyj;
             }
         }
-        return (acc, wtot, wtot);
+        return (acc, wtot, wtot, wtot);
     }
+    let w_lim = src.ifd_w;
+    let h_lim = src.ifd_h;
+    let mut in_wx = 0.0f32;
+    for (i, &wxi) in wx.iter().enumerate() {
+        let rx = x0 + i as i32;
+        if rx >= 0 && rx < w_lim {
+            in_wx += wxi;
+        }
+    }
+    let mut in_wy = 0.0f32;
     let mut sum = 0.0f32;
     let mut wsum = 0.0f32;
     for (j, &wyj) in wy.iter().enumerate() {
         let ry = y0 + j as i32;
+        if ry < 0 || ry >= h_lim {
+            continue;
+        }
+        in_wy += wyj;
         let mut rs = 0.0f32;
         let mut rw = 0.0f32;
         for (i, &wxi) in wx.iter().enumerate() {
@@ -290,17 +310,19 @@ fn widened_accumulate(src: &BandSource<'_>, x0: i32, wx: &[f32], y0: i32, wy: &[
         sum += rs * wyj;
         wsum += rw * wyj;
     }
-    (sum, wsum, wtot)
+    (sum, wsum, wtot, in_wx * in_wy)
 }
 
 /// Normalise a widened-kernel accumulation. Kernels with negative lobes (cubic, lanczos) fall back
-/// to the widened tent when less than half the kernel weight lands on valid pixels (raster edges,
-/// nodata), mirroring the fixed samplers' bilinear fallback; GDAL renormalises over the valid taps.
+/// to the widened tent when less than half the full kernel weight lands on valid pixels (raster
+/// edges, nodata); positive kernels (bilinear, cubic_spline) require at least half of the
+/// in-raster kernel weight (`in_wtot`) to be valid so raster corners stay intact while interior
+/// nodata collars do not bloat.
 #[inline(always)]
-fn widened_finish(mode: ResampleMode, sum: f32, wsum: f32, wtot: f32) -> Option<f32> {
+fn widened_finish(mode: ResampleMode, sum: f32, wsum: f32, wtot: f32, in_wtot: f32) -> Option<f32> {
     let positive = matches!(mode, ResampleMode::Bilinear | ResampleMode::CubicSpline);
     if positive {
-        if wsum > 1e-6 * wtot.max(1e-6) { Some(sum / wsum) } else { Some(f32::NAN) }
+        if wsum >= 0.5 * in_wtot && wsum > 1e-6 { Some(sum / wsum) } else { Some(f32::NAN) }
     } else if wsum >= 0.5 * wtot && wsum > 1e-6 {
         Some(sum / wsum)
     } else {
@@ -352,8 +374,8 @@ fn sample_kernel_widened_taps<const M: usize>(
     let mut wy = [0.0f32; M];
     let (x0, nx) = widened_axis_taps(mode, u, sx, &mut wx);
     let (y0, ny) = widened_axis_taps(mode, v, sy, &mut wy);
-    let (sum, wsum, wtot) = widened_accumulate(src, x0, &wx[..nx], y0, &wy[..ny]);
-    widened_finish(mode, sum, wsum, wtot)
+    let (sum, wsum, wtot, in_wtot) = widened_accumulate(src, x0, &wx[..nx], y0, &wy[..ny]);
+    widened_finish(mode, sum, wsum, wtot, in_wtot)
 }
 
 /// Most taps per axis [`WidenedSampler`] caches; wider kernels go straight to
@@ -582,7 +604,7 @@ impl WidenedSampler {
         } else {
             None
         };
-        let (sum, wsum, wtot) = match block {
+        let (sum, wsum, wtot, in_wtot) = match block {
             // Weights are normalised and zero-padded: on clean data the sum is the value.
             Some((sl, base, stride)) if src.no_nodata => {
                 return match self.width {
@@ -597,11 +619,11 @@ impl WidenedSampler {
                     8 => widened_accumulate_fixed_nan::<8>(sl, base, stride, &col.w[..8], wy),
                     _ => widened_accumulate_fixed_nan::<WIDE_CACHE_TAPS>(sl, base, stride, &col.w, wy),
                 };
-                (sum, wsum, 1.0)
+                (sum, wsum, 1.0, 1.0)
             }
             None => widened_accumulate(src, x0, &col.w[..col.count as usize], y0, wy),
         };
-        match widened_finish(self.mode, sum, wsum, wtot) {
+        match widened_finish(self.mode, sum, wsum, wtot, in_wtot) {
             Some(val) => val,
             None => sample_kernel_widened(src, u, v, self.scale_x, self.scale_y, ResampleMode::Bilinear),
         }
@@ -633,6 +655,27 @@ pub fn sample_f64_kernel_widened(
     let (x0, wx) = axis(u, scale_x);
     let (y0, wy) = axis(v, scale_y);
     let wtot = wx.iter().sum::<f64>() * wy.iter().sum::<f64>();
+    let w_lim = src.ifd_w;
+    let h_lim = src.ifd_h;
+    let in_wx: f64 = wx
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| {
+            let rx = x0 + i as i32;
+            rx >= 0 && rx < w_lim
+        })
+        .map(|(_, &w)| w)
+        .sum();
+    let in_wy: f64 = wy
+        .iter()
+        .enumerate()
+        .filter(|&(j, _)| {
+            let ry = y0 + j as i32;
+            ry >= 0 && ry < h_lim
+        })
+        .map(|(_, &w)| w)
+        .sum();
+    let in_wtot = in_wx * in_wy;
     let mut sum = 0.0f64;
     let mut wsum = 0.0f64;
     for (j, &wyj) in wy.iter().enumerate() {
@@ -644,7 +687,7 @@ pub fn sample_f64_kernel_widened(
             }
         }
     }
-    match widened_finish(mode, sum as f32, wsum as f32, wtot as f32) {
+    match widened_finish(mode, sum as f32, wsum as f32, wtot as f32, in_wtot as f32) {
         Some(val) if val.is_nan() => f64::NAN,
         Some(_) => sum / wsum,
         None => sample_f64_kernel_widened(src, u, v, scale_x, scale_y, ResampleMode::Bilinear),
@@ -1282,7 +1325,7 @@ pub(super) fn widened_plane_separable_into_with_tables(
                         // Normalised weights: the valid weight is the share of the kernel on valid pixels.
                         let ws = wrow[px];
                         row_out[px] = if positive {
-                            if ws > 1e-6 { row_out[px] / ws } else { f32::NAN }
+                            if ws >= 0.5 { row_out[px] / ws } else { f32::NAN }
                         } else if ws >= 0.5 {
                             row_out[px] / ws
                         } else {

@@ -58,14 +58,22 @@ fn sample_bilinear_raw(band: u32, u: f32, v: f32) -> f32 {
     let w01 = (1.0 - fx) * fy;
     let w11 = fx * fy;
 
+    let w_lim = i32(params.src_w);
+    let h_lim = i32(params.src_h);
+    let in0x = x0 >= 0 && x0 < w_lim;
+    let in1x = x0 + 1 >= 0 && x0 + 1 < w_lim;
+    let in0y = y0 >= 0 && y0 < h_lim;
+    let in1y = y0 + 1 >= 0 && y0 + 1 < h_lim;
+
     var sum = 0.0;
     var wsum = 0.0;
-    if (!is_nan_f32(v00)) { sum += v00 * w00; wsum += w00; }
-    if (!is_nan_f32(v10)) { sum += v10 * w10; wsum += w10; }
-    if (!is_nan_f32(v01)) { sum += v01 * w01; wsum += w01; }
-    if (!is_nan_f32(v11)) { sum += v11 * w11; wsum += w11; }
+    var wtot = 0.0;
+    if (in0x && in0y) { wtot += w00; if (!is_nan_f32(v00)) { sum += v00 * w00; wsum += w00; } }
+    if (in1x && in0y) { wtot += w10; if (!is_nan_f32(v10)) { sum += v10 * w10; wsum += w10; } }
+    if (in0x && in1y) { wtot += w01; if (!is_nan_f32(v01)) { sum += v01 * w01; wsum += w01; } }
+    if (in1x && in1y) { wtot += w11; if (!is_nan_f32(v11)) { sum += v11 * w11; wsum += w11; } }
 
-    if (wsum > 0.0) {
+    if (wsum >= 0.5 * wtot && wsum > 1e-6) {
         return sum / wsum;
     }
     return nan_f32();
