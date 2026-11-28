@@ -1915,6 +1915,53 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(rgb_w68)
     out["w68_ycbcr_odd_strip"] = p_w68_ys
 
+    # Wave 69: Pure 90-deg rotated (a=0,e=0), East-to-West mirrored (a<0), South-up DEM (e>0) & negative-key discrete int16 colormap
+    from rasterio.transform import Affine as _Affine
+    step69 = 0.7 / 128.0
+    p_w69_rot90 = synth_dir / "w69_rot90_4326.tif"
+    f32_rot90 = (100.0 + xx9 * 2.0 + yy9 * 1.5).astype(np.float32)
+    f32_rot90[60:80, 75:95] = -9999.0
+    with rasterio.open(
+        p_w69_rot90, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=_Affine(0.0, step69, -122.6, -step69, 0.0, 38.1),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_rot90, 1)
+    out["w69_rot90_4326"] = p_w69_rot90
+
+    p_w69_mirror = synth_dir / "w69_mirror_x_4326.tif"
+    f32_mirror = (50.0 + xx9 * 3.0 + yy9 * 1.2).astype(np.float32)
+    f32_mirror[75:95, 48:68] = -9999.0
+    with rasterio.open(
+        p_w69_mirror, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=_Affine(-step69, 0.0, -121.9, 0.0, -step69, 38.1),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_mirror, 1)
+    out["w69_mirror_x_4326"] = p_w69_mirror
+
+    p_w69_su = synth_dir / "w69_southup_dem.tif"
+    f32_su = (100.0 + xx9 * 4.0 + yy9 * 6.0).astype(np.float32)
+    with rasterio.open(
+        p_w69_su, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=_Affine(step69, 0.0, -122.6, 0.0, step69, 37.4),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate",
+    ) as ds:
+        ds.write(f32_su, 1)
+    out["w69_southup_dem"] = p_w69_su
+
+    p_w69_negcat = synth_dir / "w69_neg_cat_i16.tif"
+    cats69 = np.array([-10, 0, 10, 20], dtype=np.int16)
+    i16_cat = cats69[(xx9 // 32 + yy9 // 32) % 4]
+    i16_cat[75:95, 60:80] = -9999
+    with rasterio.open(
+        p_w69_negcat, "w", driver="GTiff", width=128, height=128, count=1, dtype="int16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999,
+    ) as ds:
+        ds.write(i16_cat, 1)
+    out["w69_neg_cat_i16"] = p_w69_negcat
+
     return out
 
 
@@ -6406,6 +6453,20 @@ def main() -> int:
                 ("PARITY W68 TILESIZE=128 cubic + unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&tilesize=128&resampling=cubic&unscale=true", None, "npy"),
                 ("PARITY W68 TILESIZE=512 interval colormap .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w55_f32_imask'])}&tilesize=512&colormap={qe(json.dumps([[[-30,0],[255,0,0,255]],[[0,80],[0,255,0,255]],[[80,120],[0,0,255,128]]]))}", None, "png"),
                 ("PARITY W68 TILESIZE=128 STAC hetero unscale=true .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&tilesize=128&unscale=true", None, "npy"),
+                # --- Wave 69: Pure 90-deg rotated (a=0,e=0), East-to-West mirrored (a<0), South-up DEM (e>0) & negative-key discrete int16 colormap ---
+                ("PARITY W69 ROT90 (a=0,e=0) tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w69_rot90_4326'])}", None, "npy"),
+                ("PARITY W69 ROT90 (a=0,e=0) /point", "GET", f"/cog/point/-122.15,37.85?url={q(s['w69_rot90_4326'])}", None, "point"),
+                ("BETTER W69 ROT90 (a=0,e=0) /bbox 64x64.npy (cw exact, tt 500)", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w69_rot90_4326'])}", None, "better_w69_non_northup"),
+                ("PARITY W69 ROT90 (a=0,e=0) GET /statistics", "GET", f"/cog/statistics?url={q(s['w69_rot90_4326'])}", None, "stats"),
+                ("PARITY W69 MIRROR-X (a<0) tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w69_mirror_x_4326'])}", None, "npy"),
+                ("BETTER W69 MIRROR-X (a<0) /point (cw exact 239.0, tt 404)", "GET", f"/cog/point/-122.15,37.85?url={q(s['w69_mirror_x_4326'])}", None, "better_w69_non_northup"),
+                ("BETTER W69 MIRROR-X (a<0) /bbox 64x64.npy (cw exact, tt 500)", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w69_mirror_x_4326'])}", None, "better_w69_non_northup"),
+                ("BETTER W69 MIRROR-X (a<0) POST /statistics (cw exact, tt 500)", "POST", f"/cog/statistics?url={q(s['w69_mirror_x_4326'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "better_w69_non_northup"),
+                ("PARITY W69 SOUTH-UP DEM slope buffer=3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w69_southup_dem'])}&algorithm=slope&buffer=3", None, "npy"),
+                ("PARITY W69 SOUTH-UP DEM hillshade buffer=3 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w69_southup_dem'])}&algorithm=hillshade&buffer=3", None, "png"),
+                ("PARITY W69 SOUTH-UP DEM resampling=bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w69_southup_dem'])}&resampling=bilinear", None, "npy"),
+                ("BETTER W69 SOUTH-UP DEM POST /statistics (cw exact, tt 500)", "POST", f"/cog/statistics?url={q(s['w69_southup_dem'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "better_w69_non_northup"),
+                ("PARITY W69 NEG-KEY discrete JSON colormap int16 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w69_neg_cat_i16'])}&colormap={qe(json.dumps({'-10':[255,0,0,255],'0':[0,255,0,255],'10':[0,0,255,255],'20':[255,255,0,128]}))}", None, "png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -6579,6 +6640,36 @@ def main() -> int:
                                 payload_ok = len(r_cw.json().get("values", [])) > 0
                         ok = r_cw.status_code == 200 and payload_ok and r_tt.status_code == exp_tt
                         detail = f"cw={r_cw.status_code}(valid={payload_ok}) tt={r_tt.status_code}"
+                    elif kind == "better_w69_non_northup":
+                        if "/point/" in path:
+                            ok = (
+                                r_cw.status_code == 200 and r_tt.status_code == 404
+                                and abs(float(r_cw.json()["values"][0]) - 239.0) < 1e-4
+                            )
+                            detail = f"cw={r_cw.status_code} val={r_cw.json().get('values') if r_cw.status_code == 200 else None} tt={r_tt.status_code}"
+                        elif ".npy" in path:
+                            if r_cw.status_code == 200 and r_tt.status_code == 500:
+                                arr = np.load(io.BytesIO(r_cw.content))
+                                fmin = np.finfo(arr.dtype).min
+                                valid = arr[1] > fmin
+                                nvalid = int(valid.sum())
+                                mean_v = float(arr[0][valid].mean()) if valid.any() else 0.0
+                                exp_lo, exp_hi = (310.0, 326.0) if "rot90" in path else (312.0, 328.0)
+                                ok = arr.shape == (2, 64, 64) and 3500 < nvalid < 4000 and exp_lo < mean_v < exp_hi
+                                detail = f"cw=200 shape={arr.shape} valid={nvalid} mean={mean_v:.2f} tt=500"
+                            else:
+                                ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
+                        else:
+                            if r_cw.status_code == 200 and r_tt.status_code == 500:
+                                st = r_cw.json()["properties"]["statistics"]["b1"]
+                                mean_v, cnt = float(st["mean"]), float(st["count"])
+                                if "southup" in path:
+                                    ok = 730.0 < mean_v < 740.0 and 5300.0 < cnt < 5400.0
+                                else:
+                                    ok = 310.0 < mean_v < 330.0 and 4900.0 < cnt < 5000.0
+                                detail = f"cw=200 mean={mean_v:.2f} count={cnt:.1f} tt=500"
+                            else:
+                                ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
                     elif kind == "better_cw404_tt200":
                         ok = r_cw.status_code == 404 and r_tt.status_code == 200
                         detail = f"cw={r_cw.status_code} tt={r_tt.status_code}"
