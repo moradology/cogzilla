@@ -1748,6 +1748,64 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(f32_65, 1)
     out["w65_all_nodata_tile"] = p_w65_and
 
+    # Wave 66: Constant-value (zero-variance) float32 COG + nodata hole, and STAC item with
+    # heterogeneous CRS (EPSG:32610 vs EPSG:4326) AND heterogeneous dtype (uint16 vs float32)
+    p_w66_const = synth_dir / "w66_const_f32.tif"
+    f32_66 = np.full((128, 128), 42.0, dtype=np.float32)
+    f32_66[80:105, 60:85] = -9999.0
+    with rasterio.open(
+        p_w66_const, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_66, 1)
+    out["w66_const_f32"] = p_w66_const
+
+    p_w66_flat = synth_dir / "w66_const_flat.tif"
+    with rasterio.open(
+        p_w66_flat, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_bounds(-122.6, 37.4, -121.9, 38.1, 128, 128),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate",
+    ) as ds:
+        ds.write(np.full((128, 128), 42.0, dtype=np.float32), 1)
+    out["w66_const_flat"] = p_w66_flat
+
+    p_w66_red = synth_dir / "w66_red_utm_u16.tif"
+    b66_utm = rasterio.warp.transform_bounds("EPSG:4326", "EPSG:32610", -122.6, 37.4, -121.9, 38.1)
+    tf_w66_utm = from_bounds(*b66_utm, 128, 128)
+    u16_66 = (100 + xx9.astype(np.uint32) * 3 + yy9.astype(np.uint32) * 2).astype(np.uint16)
+    with rasterio.open(
+        p_w66_red, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:32610", transform=tf_w66_utm, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_66, 1)
+
+    p_w66_nir = synth_dir / "w66_nir_4326_f32.tif"
+    f32_66_nir = (200.0 + xx9 * 2.5 + yy9 * 1.5).astype(np.float32)
+    with rasterio.open(
+        p_w66_nir, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_bounds(-122.6, 37.4, -121.9, 38.1, 128, 128),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_66_nir, 1)
+
+    p_w66_stac = synth_dir / "w66_stac_hetero.json"
+    p_w66_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w66-hetero-crs-dtype",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "red": {"href": str(p_w66_red), "type": "image/tiff; application=geotiff"},
+            "nir": {"href": str(p_w66_nir), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w66_stac_hetero"] = p_w66_stac
+
     return out
 
 
@@ -6017,6 +6075,18 @@ def main() -> int:
                 ("PARITY W65 ALL-NODATA interior tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w65_all_nodata_tile'])}", None, "npy"),
                 ("PARITY W65 ALL-NODATA interior /point", "GET", f"/cog/point/-122.25,37.65?url={q(s['w65_all_nodata_tile'])}", None, "point"),
                 ("PARITY W65 ALL-NODATA interior POST /statistics", "POST", f"/cog/statistics?url={q(s['w65_all_nodata_tile'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.4, 37.55], [-122.1, 37.55], [-122.1, 37.70], [-122.4, 37.70], [-122.4, 37.55]]]}}, "post_stats"),
+                # --- Wave 66: Constant-value (zero-variance) raster, STAC hetero-CRS (32610+4326) + hetero-dtype (u16+f32), bbox average/mode ---
+                ("PARITY W66 CONST raster GET /statistics", "GET", f"/cog/statistics?url={q(s['w66_const_f32'])}", None, "stats"),
+                ("PARITY W66 CONST raster POST /statistics", "POST", f"/cog/statistics?url={q(s['w66_const_f32'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W66 CONST raster degenerate rescale=42,42 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w66_const_f32'])}&rescale=42,42&colormap_name=viridis", None, "png"),
+                ("PARITY W66 CONST raster slope buffer=3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w66_const_flat'])}&algorithm=slope&buffer=3", None, "npy"),
+                ("PARITY W66 CONST raster hillshade buffer=3 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w66_const_flat'])}&algorithm=hillshade&buffer=3", None, "png"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "npy"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "geotiff"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "point"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir /statistics", "GET", f"/stac/statistics?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "stats"),
+                ("PARITY W66 BBOX resampling=average f32+hole 32x32.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/32x32.npy?url={q(s['w55_f32_imask'])}&resampling=average", None, "npy"),
+                ("PARITY W66 BBOX resampling=mode cat u8 32x32.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/32x32.npy?url={q(s['w23_cat_u8'])}&resampling=mode", None, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
