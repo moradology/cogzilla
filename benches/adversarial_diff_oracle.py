@@ -2000,6 +2000,21 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
             ds.build_overviews([2, 4], rasterio.enums.Resampling.average)
     out["w74_ovr_imask_f32_scaled"] = p_w74_f32
 
+    # Wave 75: Signed int16 decimetre DEM (raw -12000..+12765, scale=0.1, offset=-200.0 -> -1400m..+1076.5m, nodata=-32768)
+    # Exercises negative raw int16 + negative elevations (-330.5m..+832m on tile 10/164/396, -873.5m..+550m on bbox) + fractional metres + unscale=true
+    i16_75 = (xx9 * 120 + yy9 * 75 - 12000).astype(np.int16)
+    i16_75[75:95, 60:80] = -32768
+    p_w75_dem = synth_dir / "w75_neg_dem_i16_scaled.tif"
+    with rasterio.open(
+        p_w75_dem, "w", driver="GTiff", width=128, height=128, count=1, dtype="int16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=2, nodata=-32768,
+    ) as ds:
+        ds.write(i16_75, 1)
+        ds.scales = (0.1,)
+        ds.offsets = (-200.0,)
+    out["w75_neg_dem_i16_scaled"] = p_w75_dem
+
     return out
 
 
@@ -6576,6 +6591,19 @@ def main() -> int:
                 ("PARITY W74 OVR+IMASK f32+unscale GET /statistics", "GET", f"/cog/statistics?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true", None, "stats"),
                 ("PARITY W74 OVR+IMASK f32+unscale POST /statistics", "POST", f"/cog/statistics?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.50, 37.50], [-122.00, 37.50], [-122.00, 38.05], [-122.50, 38.05], [-122.50, 37.50]]]}}, "post_stats"),
                 ("PARITY W74 OVR+IMASK f32 /cog/info.geojson", "GET", f"/cog/info.geojson?url={q(s['w74_ovr_imask_f32_scaled'])}", None, "info_geojson_w23"),
+                # --- Wave 75: Negative-elevation scaled int16 DEM (-500m..+1976.5m) with terrarium, terrainrgb, hillshade & slope across all routes ---
+                ("PARITY W75 NEG-DEM unscale+terrarium tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrarium", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrarium tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrarium", None, "npy"),
+                ("PARITY W75 NEG-DEM unscale+terrainrgb tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrainrgb tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "npy"),
+                ("PARITY W75 NEG-DEM unscale+hillshade custom buffer=3 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=hillshade&buffer=3&algorithm_params={qe(json.dumps({'azimuth':225,'angle_altitude':35,'z_exaggeration':2.0}))}", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+slope buffer=3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=slope&buffer=3", None, "npy"),
+                ("PARITY W75 NEG-DEM unscale+terrarium /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrarium", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrainrgb /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrarium POST /feature 64x64.png", "POST", f"/cog/feature/64x64.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrarium", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrainrgb /preview 64x64.png", "GET", f"/cog/preview/64x64.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrarium /cog/map 64x64 f=png", "GET", f"/cog/map?url={q(s['w75_neg_dem_i16_scaled'])}&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&unscale=true&algorithm=terrarium&f=png", None, "png"),
+                ("PARITY W75 NEG-DEM unscale+terrainrgb tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "geotiff"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
