@@ -17,6 +17,7 @@ pub const AIMD_ENV: &str = "COGZILLA_AIMD";
 pub const AIMD_TARGET_MS_ENV: &str = "COGZILLA_AIMD_TARGET_MS";
 pub const AIMD_MIN_LIMIT_ENV: &str = "COGZILLA_AIMD_MIN_LIMIT";
 pub const AIMD_MAX_LIMIT_ENV: &str = "COGZILLA_AIMD_MAX_LIMIT";
+pub const MAX_TILESIZE_ENV: &str = "COGZILLA_MAX_TILESIZE";
 
 /// Default `Cache-Control: public, max-age=<N>` seconds on raster & pgSTAC responses.
 pub const DEFAULT_CACHE_CONTROL_MAX_AGE_SECS: u64 = 3600;
@@ -30,6 +31,10 @@ pub const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 pub const DEFAULT_AIMD_TARGET_MS: u64 = 150;
 /// Default AIMD maximum concurrency ceiling.
 pub const DEFAULT_AIMD_MAX_LIMIT: usize = 4096;
+/// Default maximum `?tilesize=` / `?tile_size=` dimension in pixels (override via `COGZILLA_MAX_TILESIZE`, up to 4096).
+pub const DEFAULT_MAX_TILESIZE: u32 = 2048;
+/// Hard ceiling on `COGZILLA_MAX_TILESIZE` matching the bbox renderer's 4096 px cap.
+pub const HARD_MAX_TILESIZE: u32 = 4096;
 
 /// Warning emitted when a `COGZILLA_*` environment variable is set to an unparseable value
 /// and falls back to its default.
@@ -58,6 +63,7 @@ pub struct Config {
     pub aimd_target_ms: u64,
     pub aimd_min_limit: Option<usize>,
     pub aimd_max_limit: usize,
+    pub max_tilesize: u32,
     cache_control: HeaderValue,
     zarr_cache_control: HeaderValue,
 }
@@ -259,6 +265,25 @@ impl Config {
             &mut warnings,
         )
         .max(aimd_min_limit.unwrap_or(1));
+        let raw_max_tilesize = parse_usize(
+            get,
+            MAX_TILESIZE_ENV,
+            DEFAULT_MAX_TILESIZE as usize,
+            &mut warnings,
+        );
+        let max_tilesize = if (64..=HARD_MAX_TILESIZE as usize).contains(&raw_max_tilesize) {
+            raw_max_tilesize as u32
+        } else {
+            let clamped = raw_max_tilesize.clamp(64, HARD_MAX_TILESIZE as usize) as u32;
+            if let Some(raw) = get(MAX_TILESIZE_ENV) {
+                warnings.push(ConfigWarning {
+                    var: MAX_TILESIZE_ENV,
+                    raw,
+                    reason: format!("clamped to allowed range 64..={HARD_MAX_TILESIZE} (using {clamped})"),
+                });
+            }
+            clamped
+        };
 
         let cfg = Self {
             cache_control_max_age_secs,
@@ -270,6 +295,7 @@ impl Config {
             aimd_target_ms,
             aimd_min_limit,
             aimd_max_limit,
+            max_tilesize,
             cache_control: format_cache_control(cache_control_max_age_secs),
             zarr_cache_control: format_cache_control(zarr_cache_control_max_age_secs),
         };
@@ -315,6 +341,7 @@ impl Config {
                     .unwrap_or_else(|| "auto".into()),
             ),
             (AIMD_MAX_LIMIT_ENV, self.aimd_max_limit.to_string()),
+            (MAX_TILESIZE_ENV, self.max_tilesize.to_string()),
         ]
     }
 }
@@ -348,7 +375,7 @@ mod tests {
         assert_eq!(cfg.aimd_target_ms, DEFAULT_AIMD_TARGET_MS);
         assert_eq!(cfg.aimd_min_limit, None);
         assert_eq!(cfg.aimd_max_limit, DEFAULT_AIMD_MAX_LIMIT);
-        assert_eq!(cfg.effective_entries().len(), 9);
+        assert_eq!(cfg.effective_entries().len(), 10);
     }
 
     #[test]
@@ -522,5 +549,24 @@ mod tests {
         assert!(warnings.iter().any(|w| w.var == "COGZILLA_ZARR_CACHE_CONTROL_MAX_AGE"));
         assert_eq!(cfg.aimd_min_limit, Some(100));
         assert_eq!(cfg.aimd_max_limit, 100);
+    }
+
+    #[test]
+    fn max_tilesize_defaults_overrides_and_clamps_to_hard_bounds() {
+        let (def, w0) = Config::from_lookup(&|_| None);
+        assert_eq!(def.max_tilesize, DEFAULT_MAX_TILESIZE);
+        assert!(w0.is_empty());
+
+        let (cfg4k, w1) = Config::from_lookup(&|k| (k == MAX_TILESIZE_ENV).then(|| "4096".into()));
+        assert_eq!(cfg4k.max_tilesize, 4096);
+        assert!(w1.is_empty());
+
+        let (cfg_hi, w2) = Config::from_lookup(&|k| (k == MAX_TILESIZE_ENV).then(|| "8192".into()));
+        assert_eq!(cfg_hi.max_tilesize, HARD_MAX_TILESIZE);
+        assert!(w2.iter().any(|w| w.var == MAX_TILESIZE_ENV));
+
+        let (cfg_lo, w3) = Config::from_lookup(&|k| (k == MAX_TILESIZE_ENV).then(|| "16".into()));
+        assert_eq!(cfg_lo.max_tilesize, 64);
+        assert!(w3.iter().any(|w| w.var == MAX_TILESIZE_ENV));
     }
 }

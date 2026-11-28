@@ -1116,9 +1116,10 @@ async fn handle_tile(
     let tile_size = q
         .tilesize
         .unwrap_or_else(|| 256 * scale_opt.unwrap_or(1).clamp(1, 4));
-    if tile_size == 0 || tile_size > 2048 {
+    let max_ts = crate::config::Config::global().max_tilesize;
+    if tile_size == 0 || tile_size > max_ts {
         return Err(ZarrError::InvalidSelection {
-            detail: format!("tilesize {tile_size} out of allowed range 1..=2048"),
+            detail: format!("tilesize {tile_size} out of allowed range 1..={max_ts}"),
         });
     }
 
