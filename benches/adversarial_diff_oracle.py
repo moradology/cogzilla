@@ -1748,6 +1748,147 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(f32_65, 1)
     out["w65_all_nodata_tile"] = p_w65_and
 
+    # Wave 66: Constant-value (zero-variance) float32 COG + nodata hole, and STAC item with
+    # heterogeneous CRS (EPSG:32610 vs EPSG:4326) AND heterogeneous dtype (uint16 vs float32)
+    p_w66_const = synth_dir / "w66_const_f32.tif"
+    f32_66 = np.full((128, 128), 42.0, dtype=np.float32)
+    f32_66[80:105, 60:85] = -9999.0
+    with rasterio.open(
+        p_w66_const, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_66, 1)
+    out["w66_const_f32"] = p_w66_const
+
+    p_w66_flat = synth_dir / "w66_const_flat.tif"
+    with rasterio.open(
+        p_w66_flat, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_bounds(-122.6, 37.4, -121.9, 38.1, 128, 128),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate",
+    ) as ds:
+        ds.write(np.full((128, 128), 42.0, dtype=np.float32), 1)
+    out["w66_const_flat"] = p_w66_flat
+
+    p_w66_red = synth_dir / "w66_red_utm_u16.tif"
+    b66_utm = rasterio.warp.transform_bounds("EPSG:4326", "EPSG:32610", -122.6, 37.4, -121.9, 38.1)
+    tf_w66_utm = from_bounds(*b66_utm, 128, 128)
+    u16_66 = (100 + xx9.astype(np.uint32) * 3 + yy9.astype(np.uint32) * 2).astype(np.uint16)
+    with rasterio.open(
+        p_w66_red, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:32610", transform=tf_w66_utm, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_66, 1)
+
+    p_w66_nir = synth_dir / "w66_nir_4326_f32.tif"
+    f32_66_nir = (200.0 + xx9 * 2.5 + yy9 * 1.5).astype(np.float32)
+    with rasterio.open(
+        p_w66_nir, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_bounds(-122.6, 37.4, -121.9, 38.1, 128, 128),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_66_nir, 1)
+
+    p_w66_stac = synth_dir / "w66_stac_hetero.json"
+    p_w66_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w66-hetero-crs-dtype",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "red": {"href": str(p_w66_red), "type": "image/tiff; application=geotiff"},
+            "nir": {"href": str(p_w66_nir), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w66_stac_hetero"] = p_w66_stac
+
+    # Wave 67: STAC unscale=true with heterogeneous per-asset & per-band (scale, offset) + sub-byte NBITS=12/4 with nodata
+    tf_w67 = from_bounds(-122.6, 37.4, -121.9, 38.1, 128, 128)
+    p_w67_red = synth_dir / "w67_red_scaled_u16.tif"
+    u16_67_r = (2000 + xx9 * 25 + yy9 * 15).astype(np.uint16)
+    u16_67_r[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w67_red, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_67_r, 1)
+        ds.scales = (0.0001,)
+        ds.offsets = (-0.1,)
+
+    p_w67_nir = synth_dir / "w67_nir_scaled_u16.tif"
+    u16_67_n = (3000 + xx9 * 30 + yy9 * 20).astype(np.uint16)
+    u16_67_n[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w67_nir, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_67_n, 1)
+        ds.scales = (0.0002,)
+        ds.offsets = (0.05,)
+
+    p_w67_ms = synth_dir / "w67_ms_hetero_scale_u16.tif"
+    u16_67_ms = np.stack([
+        (1000 + xx9 * 10 + yy9 * 5).astype(np.uint16),
+        (2000 + xx9 * 15 + yy9 * 10).astype(np.uint16),
+        (4000 + xx9 * 20 + yy9 * 15).astype(np.uint16),
+    ])
+    u16_67_ms[:, 75:95, 60:80] = 0
+    with rasterio.open(
+        p_w67_ms, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(u16_67_ms)
+        ds.scales = (0.01, 0.001, -0.005)
+        ds.offsets = (1.0, -2.0, 50.0)
+
+    p_w67_stac = synth_dir / "w67_stac_scaled.json"
+    p_w67_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w67-scaled-assets",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "red": {"href": str(p_w67_red), "type": "image/tiff; application=geotiff"},
+            "nir": {"href": str(p_w67_nir), "type": "image/tiff; application=geotiff"},
+            "ms": {"href": str(p_w67_ms), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w67_stac_scaled"] = p_w67_stac
+
+    p_w67_nb12 = synth_dir / "w67_nbits12_nodata_scaled.tif"
+    u16_nb12 = (200 + xx9 * 18 + yy9 * 12).astype(np.uint16)
+    u16_nb12[75:95, 60:80] = 4095
+    with rasterio.open(
+        p_w67_nb12, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nbits=12, nodata=4095,
+    ) as ds:
+        ds.write(u16_nb12, 1)
+        ds.scales = (0.001,)
+        ds.offsets = (-0.5,)
+    out["w67_nbits12_nodata_scaled"] = p_w67_nb12
+
+    p_w67_nb4 = synth_dir / "w67_nbits4_nodata.tif"
+    u8_nb4 = ((xx9 // 10 + yy9 // 20) % 15).astype(np.uint8)
+    u8_nb4[75:95, 60:80] = 15
+    with rasterio.open(
+        p_w67_nb4, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nbits=4, nodata=15,
+    ) as ds:
+        ds.write(u8_nb4, 1)
+    out["w67_nbits4_nodata"] = p_w67_nb4
+
     return out
 
 
@@ -6017,6 +6158,32 @@ def main() -> int:
                 ("PARITY W65 ALL-NODATA interior tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w65_all_nodata_tile'])}", None, "npy"),
                 ("PARITY W65 ALL-NODATA interior /point", "GET", f"/cog/point/-122.25,37.65?url={q(s['w65_all_nodata_tile'])}", None, "point"),
                 ("PARITY W65 ALL-NODATA interior POST /statistics", "POST", f"/cog/statistics?url={q(s['w65_all_nodata_tile'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.4, 37.55], [-122.1, 37.55], [-122.1, 37.70], [-122.4, 37.70], [-122.4, 37.55]]]}}, "post_stats"),
+                # --- Wave 66: Constant-value (zero-variance) raster, STAC hetero-CRS (32610+4326) + hetero-dtype (u16+f32), bbox average/mode ---
+                ("PARITY W66 CONST raster GET /statistics", "GET", f"/cog/statistics?url={q(s['w66_const_f32'])}", None, "stats"),
+                ("PARITY W66 CONST raster POST /statistics", "POST", f"/cog/statistics?url={q(s['w66_const_f32'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W66 CONST raster degenerate rescale=42,42 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w66_const_f32'])}&rescale=42,42&colormap_name=viridis", None, "png"),
+                ("PARITY W66 CONST raster slope buffer=3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w66_const_flat'])}&algorithm=slope&buffer=3", None, "npy"),
+                ("PARITY W66 CONST raster hillshade buffer=3 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w66_const_flat'])}&algorithm=hillshade&buffer=3", None, "png"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "npy"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "geotiff"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "point"),
+                ("PARITY W66 STAC HETERO-CRS+DTYPE red+nir /statistics", "GET", f"/stac/statistics?url={q(s['w66_stac_hetero'])}&assets=red&assets=nir", None, "stats"),
+                ("PARITY W66 BBOX resampling=average f32+hole 32x32.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/32x32.npy?url={q(s['w55_f32_imask'])}&resampling=average", None, "npy"),
+                ("PARITY W66 BBOX resampling=mode cat u8 32x32.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/32x32.npy?url={q(s['w23_cat_u8'])}&resampling=mode", None, "npy"),
+                # --- Wave 67: STAC unscale=true hetero scale+offset + pipe |bidx=3,1 + expression, & NBITS=12/4 + nodata + smooth/unscale ---
+                ("PARITY W67 STAC unscale=true hetero red+nir .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "npy"),
+                ("PARITY W67 STAC unscale=true hetero red+nir /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "point"),
+                ("PARITY W67 STAC unscale=true hetero red+nir GET /statistics", "GET", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "stats"),
+                ("PARITY W67 STAC unscale=true hetero red+nir POST /statistics", "POST", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W67 STAC unscale=true hetero red+nir /bbox .npy", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "npy"),
+                ("PARITY W67 STAC unscale=true hetero red+nir POST /feature .npy", "POST", f"/stac/feature/64x64.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "npy"),
+                ("PARITY W67 STAC unscale=true + expr NDVI red+nir .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&expression={qe('(b2-b1)/(b2+b1)')}", None, "npy"),
+                ("PARITY W67 STAC unscale=true + inline expr ms .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets={qe('ms|expression=(b3-b1)/(b3+b1)')}&unscale=true", None, "npy"),
+                ("PARITY W67 STAC unscale=true + pipe ms|bidx=3,1 .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets={qe('ms|bidx=3,1')}&unscale=true", None, "npy"),
+                ("PARITY W67 NBITS=12 nodata=4095 resampling=bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&resampling=bilinear", None, "npy"),
+                ("PARITY W67 NBITS=12 nodata=4095 unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&unscale=true", None, "npy"),
+                ("PARITY W67 NBITS=12 nodata=4095 GET /statistics", "GET", f"/cog/statistics?url={q(s['w67_nbits12_nodata_scaled'])}", None, "stats"),
+                ("PARITY W67 NBITS=4 nodata=15 resampling=cubic .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits4_nodata'])}&resampling=cubic", None, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
