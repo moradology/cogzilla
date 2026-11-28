@@ -417,9 +417,7 @@ where
                     if pq.unscale {
                         apply_unscale_cogs(&mut treq.bands, &cogs, None);
                     }
-                    if cogs.len() == 1
-                        && matches!(treq.format, OutputFormat::RawF32 | OutputFormat::Npy)
-                    {
+                    if matches!(treq.format, OutputFormat::RawF32 | OutputFormat::Npy) {
                         treq.format = geotiff_render_format(
                             treq.format,
                             ct,

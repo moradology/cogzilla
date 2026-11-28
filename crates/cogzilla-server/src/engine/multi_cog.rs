@@ -132,6 +132,81 @@ impl TileEngine {
             return self.render_tile(&cogs[0], req).await;
         }
         self.stats.tiles_served.fetch_add(1, Ordering::Relaxed);
+        if matches!(req.format, OutputFormat::RawF64 | OutputFormat::NpyF64)
+            && !req.unscale
+            && matches!(
+                req.resample,
+                cogzilla_kernel::ResampleMode::Nearest | cogzilla_kernel::ResampleMode::Bilinear
+            )
+        {
+            let bands_1based: Option<Vec<u16>> = match &req.bands {
+                BandRequest::Single { band_1based, .. } => Some(vec![*band_1based]),
+                BandRequest::Rgb { bands_1based, .. } => Some(bands_1based.to_vec()),
+                BandRequest::MultiBand { bands_1based } => Some(bands_1based.clone()),
+                _ => None,
+            };
+            if let Some(b1) = bands_1based {
+                let (minx, miny, maxx, maxy) = cogzilla_proj::tile_bounds_3857(req.tile);
+                let ts = req.tile_size as usize;
+                let n_px = ts * ts;
+                let mut vals = Vec::with_capacity(b1.len() * n_px);
+                let mut kind = cogzilla_raster::SampleType::Float64;
+                let mut first_kind = true;
+                for &band_1 in &b1 {
+                    let slot = (band_1.saturating_sub(1) as usize).min(cogs.len() - 1);
+                    let cog = &cogs[slot];
+                    let st = cog.index.full_res().sample_type;
+                    if first_kind {
+                        kind = st;
+                        first_kind = false;
+                    } else if kind != st {
+                        kind = cogzilla_raster::SampleType::Float64;
+                    }
+                    let plane_bytes = Box::pin(crate::stats::render_exact_f64_array(
+                        self,
+                        cog,
+                        [minx, miny, maxx, maxy],
+                        &cogzilla_proj::CrsModel::Epsg3857,
+                        false,
+                        req.tile_size,
+                        req.tile_size,
+                        None,
+                        &[1],
+                        req.resample,
+                        None,
+                        false,
+                        st,
+                        true,
+                        true,
+                        true,
+                    ))
+                    .await?;
+                    if plane_bytes.len() == n_px * 8 {
+                        for chunk in plane_bytes.chunks_exact(8) {
+                            vals.push(f64::from_le_bytes(chunk.try_into().unwrap()));
+                        }
+                    } else {
+                        vals.resize(vals.len() + n_px, f64::NAN);
+                    }
+                }
+                if req.format == OutputFormat::RawF64 {
+                    let mut out = bytes::BytesMut::with_capacity(vals.len() * 8);
+                    for v in vals {
+                        out.extend_from_slice(&v.to_le_bytes());
+                    }
+                    return Ok(out.freeze());
+                }
+                return Ok(cogzilla_kernel::encode_npy_typed_f64(
+                    &vals,
+                    b1.len(),
+                    ts,
+                    ts,
+                    kind,
+                    None,
+                    true,
+                ));
+            }
+        }
         if matches!(
             req.format,
             OutputFormat::Npy | OutputFormat::RawF64 | OutputFormat::NpyF64

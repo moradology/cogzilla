@@ -965,6 +965,17 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                             Some(&first_cog),
                         )?;
                         validate_mosaic_tile_params(&pq, treq.tile_size)?;
+                        if matches!(treq.format, OutputFormat::RawF32 | OutputFormat::Npy) {
+                            treq.format = geotiff_render_format(
+                                treq.format,
+                                ct,
+                                &pq,
+                                Some(&first_cog),
+                                &treq.bands,
+                                st,
+                                pq.return_mask && pq.pixel_selection == Selection::First,
+                            );
+                        }
                         let ts = treq.tile_size;
                         if auto_fmt {
                             treq.format = OutputFormat::RawRgba;
@@ -1084,7 +1095,7 @@ if method == Method::GET && segs.first() == Some(&"mosaic") && segs.get(1) == So
                         let first_cog = open_first_mosaic_cog(&engine, &pq.urls).await?;
                         let db = first_cog.index.full_res().samples_per_pixel;
                         let st = first_cog.index.full_res().sample_type;
-                        let (treq, ct) = build_tile_request(
+                        let (mut treq, ct) = build_tile_request(
                             Some(&engine),
                             TileCoord { z, x, y },
                             sc,
@@ -1096,6 +1107,17 @@ if method == Method::GET && segs.first() == Some(&"mosaic") && segs.get(1) == So
                             Some(&first_cog),
                         )?;
                         validate_mosaic_tile_params(&pq, treq.tile_size)?;
+                        if matches!(treq.format, OutputFormat::RawF32 | OutputFormat::Npy) {
+                            treq.format = geotiff_render_format(
+                                treq.format,
+                                ct,
+                                &pq,
+                                Some(&first_cog),
+                                &treq.bands,
+                                st,
+                                pq.return_mask && pq.pixel_selection == Selection::First,
+                            );
+                        }
                         let ts = treq.tile_size;
                         let fmt = treq.format;
                         let out_dim = (ts as f32 + 2.0 * pq.buffer).round() as u32;
@@ -1238,7 +1260,7 @@ if method == Method::GET && segs.first() == Some(&"mosaic") && segs.get(2) == So
                         let first_cog = open_first_mosaic_cog(&engine, &urls).await?;
                         let db = first_cog.index.full_res().samples_per_pixel;
                         let st = first_cog.index.full_res().sample_type;
-                        let (treq, ct) = build_tile_request(
+                        let (mut treq, ct) = build_tile_request(
                             Some(&engine),
                             tile,
                             sc,
@@ -1250,6 +1272,17 @@ if method == Method::GET && segs.first() == Some(&"mosaic") && segs.get(2) == So
                             Some(&first_cog),
                         )?;
                         validate_mosaic_tile_params(&pq, treq.tile_size)?;
+                        if matches!(treq.format, OutputFormat::RawF32 | OutputFormat::Npy) {
+                            treq.format = geotiff_render_format(
+                                treq.format,
+                                ct,
+                                &pq,
+                                Some(&first_cog),
+                                &treq.bands,
+                                st,
+                                pq.return_mask && pq.pixel_selection == Selection::First,
+                            );
+                        }
                         let ts = treq.tile_size;
                         let fmt = treq.format;
                         let out_dim = (ts as f32 + 2.0 * pq.buffer).round() as u32;

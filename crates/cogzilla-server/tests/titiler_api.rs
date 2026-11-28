@@ -7786,3 +7786,169 @@ async fn multiband_npy_preserves_file_nodata_on_partially_valid_pixels() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[tokio::test]
+async fn multi_cog_and_mosaic_preserve_exact_float64_precision() {
+    let tmp = std::env::temp_dir().join(format!(
+        "cogzilla_f64_multi_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Helper: write a 16x16 1-band Float64 EPSG:4326 GeoTIFF covering WebMercator (6, 33, 24).
+    let write_f64_cog = |path: &std::path::Path, fill_left: f64, fill_right: f64| {
+        let w = 16u32;
+        let h = 16u32;
+        let bounds = [5.0f64, 36.0, 12.0, 42.0];
+        let mut pixels = Vec::with_capacity((w * h * 8) as usize);
+        for _y in 0..h {
+            for x in 0..w {
+                let v = if x < 8 { fill_left } else { fill_right };
+                pixels.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        let mut buf = Vec::<u8>::new();
+        buf.extend_from_slice(b"II");
+        buf.extend_from_slice(&42u16.to_le_bytes());
+        buf.extend_from_slice(&8u32.to_le_bytes());
+
+        let num_entries: u16 = 14;
+        let ifd_size = 2 + (num_entries as usize) * 12 + 4;
+        let data_start = 8 + ifd_size;
+        let scale_off = data_start as u32;
+        let tiepoint_off = scale_off + 24;
+        let geokey_off = tiepoint_off + 48;
+        let pixel_off = geokey_off + 24;
+
+        let push_entry = |b: &mut Vec<u8>, tag: u16, ty: u16, count: u32, val: u32| {
+            b.extend_from_slice(&tag.to_le_bytes());
+            b.extend_from_slice(&ty.to_le_bytes());
+            b.extend_from_slice(&count.to_le_bytes());
+            b.extend_from_slice(&val.to_le_bytes());
+        };
+        buf.extend_from_slice(&num_entries.to_le_bytes());
+        push_entry(&mut buf, 256, 4, 1, w);
+        push_entry(&mut buf, 257, 4, 1, h);
+        push_entry(&mut buf, 258, 3, 1, 64); // Float64
+        push_entry(&mut buf, 259, 3, 1, 1);
+        push_entry(&mut buf, 262, 3, 1, 1);
+        push_entry(&mut buf, 273, 4, 1, pixel_off);
+        push_entry(&mut buf, 277, 3, 1, 1);
+        push_entry(&mut buf, 278, 4, 1, h);
+        push_entry(&mut buf, 279, 4, 1, pixels.len() as u32);
+        push_entry(&mut buf, 284, 3, 1, 1);
+        push_entry(&mut buf, 339, 3, 1, 3); // IEEEFP
+        push_entry(&mut buf, 33550, 12, 3, scale_off);
+        push_entry(&mut buf, 33922, 12, 6, tiepoint_off);
+        push_entry(&mut buf, 34735, 3, 12, geokey_off);
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        let sx = (bounds[2] - bounds[0]) / w as f64;
+        let sy = (bounds[3] - bounds[1]) / h as f64;
+        for v in [sx, sy, 0.0f64] {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [0.0f64, 0.0, 0.0, bounds[0], bounds[3], 0.0] {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [1u16, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326] {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        buf.extend_from_slice(&pixels);
+        std::fs::write(path, buf).unwrap();
+    };
+
+    // Values > 2^24 that collapse to identical f32 (1_000_000_000.0) if truncated through f32!
+    let v_a = 1_000_000_000.125f64;
+    let v_b = 1_000_000_000.375f64;
+    let cog_a = tmp.join("f64_a.tif");
+    let cog_b = tmp.join("f64_b.tif");
+    // cog_a: valid v_a on left half, NaN on right half; cog_b: valid v_b everywhere.
+    write_f64_cog(&cog_a, v_a, f64::NAN);
+    write_f64_cog(&cog_b, v_b, v_b);
+
+    let mosaic_json = tmp.join("f64_mosaic.json");
+    let mj = serde_json::json!({
+        "mosaicjson": "0.0.3",
+        "minzoom": 0,
+        "maxzoom": 12,
+        "bounds": [5.0, 36.0, 12.0, 42.0],
+        "center": [8.5, 39.0, 6],
+        "quadkey_zoom": 6,
+        "tiles": {
+            "122001": [cog_a.to_string_lossy(), cog_b.to_string_lossy()]
+        }
+    });
+    std::fs::write(&mosaic_json, mj.to_string()).unwrap();
+
+    let engine = Arc::new(TileEngine::new(64 * 1024 * 1024));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_listener(engine, listener).await;
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let parse_f64_npy = |bytes: &[u8]| -> Vec<f64> {
+        assert_eq!(&bytes[..8], b"\x93NUMPY\x01\x00");
+        let hdr_len = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
+        let hdr = std::str::from_utf8(&bytes[10..10 + hdr_len]).unwrap();
+        assert!(hdr.contains("'<f8'"), "expected <f8 .npy header, got {hdr}");
+        bytes[10 + hdr_len..]
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+
+    // 1. Multi-URL /cog/tiles .npy stacking cog_a (b1) and cog_b (b2): exact f64 preserved!
+    let r_multi = client
+        .get(format!(
+            "{base}/cog/tiles/WebMercatorQuad/6/33/24.npy?url={}&url={}&resampling=nearest",
+            cog_a.display(),
+            cog_b.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r_multi.status(), 200);
+    let multi_vals = parse_f64_npy(&r_multi.bytes().await.unwrap());
+    let npix = 256 * 256;
+    assert_eq!(multi_vals.len(), 3 * npix); // 2 data bands + 1 mask plane
+    assert!(
+        multi_vals[..npix].contains(&v_a),
+        "multi-URL /cog/tiles band 0 lost f64 precision (expected exact {v_a})"
+    );
+    assert!(
+        multi_vals[npix..2 * npix].contains(&v_b),
+        "multi-URL /cog/tiles band 1 lost f64 precision (expected exact {v_b})"
+    );
+
+    // 2. MosaicJSON /mosaicjson/tiles .npy compositing cog_a over cog_b:
+    //    left half takes v_a from cog_a, right half falls through to v_b from cog_b, both exact f64!
+    let r_mos = client
+        .get(format!(
+            "{base}/mosaicjson/tiles/WebMercatorQuad/6/33/24.npy?url={}&resampling=nearest",
+            mosaic_json.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r_mos.status(), 200);
+    let mos_vals = parse_f64_npy(&r_mos.bytes().await.unwrap());
+    assert_eq!(mos_vals.len(), 2 * npix); // 1 data band + 1 mask plane
+    assert!(
+        mos_vals[..npix].contains(&v_a),
+        "mosaic tile lost f64 precision on top scene (expected exact {v_a})"
+    );
+    assert!(
+        mos_vals[..npix].contains(&v_b),
+        "mosaic tile lost f64 precision on fallback scene (expected exact {v_b})"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
