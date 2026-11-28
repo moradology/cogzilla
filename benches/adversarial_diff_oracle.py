@@ -5980,6 +5980,17 @@ def main() -> int:
                 ("PARITY W63 ALG contours GET /preview .png", "GET", f"/cog/preview/64x64.png?url={q(s['w19_dem_f32'])}&algorithm=contours&algorithm_params={qe(json.dumps({'increment': 25, 'thickness': 2}))}", None, "png"),
                 ("PARITY W63 POST /statistics non-uniform hist + p=5,50,95", "POST", f"/cog/statistics?url={q(s['w50_donut'])}&histogram_bins=20,40,70,110,130&p=5&p=50&p=95", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "post_stats"),
                 ("PARITY W63 POST /statistics histogram_range=40,100 bins=4", "POST", f"/cog/statistics?url={q(s['w50_donut'])}&histogram_bins=4&histogram_range=40,100", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "post_stats"),
+                # --- Wave 64: return_mask=false across PNG/NPY/GeoTIFF/bbox/feature/preview/STAC, STAC info.geojson, nested where() ---
+                ("PARITY W64 RETURN_MASK=false 1-band viridis .png", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.png?url={q(merc)}&rescale=0,1000&colormap_name=viridis&return_mask=false", None, "png"),
+                ("PARITY W64 RETURN_MASK=false 3-band RGB .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w27_opaque_rgb'])}&return_mask=false", None, "png"),
+                ("PARITY W64 RETURN_MASK=false GET /bbox 64x64.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w19_dem_f32'])}&return_mask=false", None, "npy"),
+                ("PARITY W64 RETURN_MASK=false GET /bbox 64x64.tif", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.tif?url={q(s['w19_dem_f32'])}&return_mask=false", None, "geotiff"),
+                ("PARITY W64 RETURN_MASK=false POST /feature 64x64.npy", "POST", f"/cog/feature/64x64.npy?url={q(s['w19_dem_f32'])}&return_mask=false", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "npy"),
+                ("PARITY W64 RETURN_MASK=false POST /feature 64x64.tif", "POST", f"/cog/feature/64x64.tif?url={q(s['w19_dem_f32'])}&return_mask=false", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "geotiff"),
+                ("PARITY W64 RETURN_MASK=false GET /preview viridis .png", "GET", f"/cog/preview/64x64.png?url={q(s['w19_dem_f32'])}&rescale=-160,160&colormap_name=viridis&return_mask=false", None, "png"),
+                ("PARITY W64 RETURN_MASK=false STAC tile 5-band .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w36_stac5b'])}&assets=ms&return_mask=false", None, "npy"),
+                ("PARITY W64 STAC /stac/info.geojson", "GET", f"/stac/info.geojson?url={q(s['w36_stac5b'])}&assets=ms", None, "stac_info_geojson"),
+                ("PARITY W64 EXPR nested where(b1>100,where(b2>120,b3,b2),b1) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('where(b1>100,where(b2>120,b3,b2),b1)')}", None, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -6047,6 +6058,10 @@ def main() -> int:
                                 gd = idet if "image/jpeg" in gct else f"gpu content-type={gct!r}"
                             elif "image/png" in ct or "image/jpeg" in ct or "image/webp" in ct:
                                 gok, gd = compare_images(r_cw.content, r_gpu.content)
+                                if gok and is_unmasked and "image/png" in ct:
+                                    im_g = Image.open(io.BytesIO(r_gpu.content))
+                                    if "A" in im_g.mode or "transparency" in im_g.info:
+                                        gok, gd = False, f"gpu unexpectedly has alpha on return_mask=false: mode={im_g.mode}"
                             elif kind == "npy_f64_exact":
                                 ac, ag = np.load(io.BytesIO(r_cw.content)), np.load(io.BytesIO(r_gpu.content))
                                 low = np.finfo(np.float64).min
@@ -6074,7 +6089,7 @@ def main() -> int:
                                 gok = ac.shape == ag.shape and bool((mc == mg).all()) and merr < 1e-4
                                 gd = f"aspect max_diff={merr:.6f}"
                             elif "application/x-binary" in ct or ".npy" in path:
-                                gok, gd = compare_npy(r_cw.content, r_gpu.content, check_values=True, masked=not is_unmasked, smooth=is_smooth)
+                                gok, gd = compare_npy(r_cw.content, r_gpu.content, check_values=True, masked=(not is_unmasked) or ("/stac/" in path), smooth=is_smooth)
                             elif "image/tiff" in ct:
                                 gok, gd = compare_geotiffs(r_cw.content, r_gpu.content, compare_pixels=True, masked=not is_unmasked, smooth=is_smooth)
                             elif kind in ("stats", "stats_w23"):
@@ -6089,7 +6104,7 @@ def main() -> int:
                                     if not fok:
                                         gok, gd = False, f"f{fi}: {fgd}"
                                         break
-                            elif kind == "info_geojson_w23":
+                            elif kind in ("info_geojson_w23", "stac_info_geojson"):
                                 d_ig = first_json_diff(r_cw.json(), r_gpu.json())
                                 gok, gd = (d_ig is None), (d_ig or "exact JSON match")
                             elif kind == "point" or "/point/" in path:
@@ -6619,6 +6634,16 @@ def main() -> int:
                         detail = f"HTTP cw={r_cw.status_code} ({r_cw.text[:100]!r}) vs tt={r_tt.status_code} ({r_tt.text[:100]!r})"
                     elif kind == "png":
                         ok, detail = compare_images(r_cw.content, r_tt.content)
+                        if ok and is_unmasked:
+                            im_c = Image.open(io.BytesIO(r_cw.content))
+                            im_t = Image.open(io.BytesIO(r_tt.content))
+                            no_a_c = "A" not in im_c.mode and "transparency" not in im_c.info
+                            no_a_t = "A" not in im_t.mode and "transparency" not in im_t.info
+                            if not (no_a_c and no_a_t):
+                                ok = False
+                                detail = f"expected no-alpha on return_mask=false: cw={im_c.mode} tt={im_t.mode}"
+                            else:
+                                detail += f" mode={im_c.mode}"
                     elif kind == "npy":
                         ok, detail = compare_npy(r_cw.content, r_tt.content, check_values=True, masked=not is_unmasked, smooth=is_smooth)
                     elif kind == "geotiff":
@@ -6660,6 +6685,24 @@ def main() -> int:
                             and jc["properties"]["bounds"] == jt["properties"]["bounds"]
                         )
                         detail = f"type={jc.get('type')} count={jc['properties']['count']} dtype={jc['properties']['dtype']}"
+                    elif kind == "stac_info_geojson":
+                        jc, jt = r_cw.json(), r_tt.json()
+                        pc, pt = jc.get("properties", {}), jt.get("properties", {})
+                        ok = (
+                            jc.get("type") == "Feature"
+                            and jc.get("geometry", {}).get("type") == "Polygon"
+                            and set(pc.keys()) == set(pt.keys())
+                            and len(pc) > 0
+                            and all(
+                                pc[k].get("count") == pt[k].get("count")
+                                and pc[k].get("dtype") == pt[k].get("dtype")
+                                and pc[k].get("width") == pt[k].get("width")
+                                and pc[k].get("height") == pt[k].get("height")
+                                and pc[k].get("bounds") == pt[k].get("bounds")
+                                for k in pt
+                            )
+                        )
+                        detail = f"type={jc.get('type')} assets={sorted(pc.keys())}"
                     elif kind == "post_fc_stats_w23":
                         fc_c, fc_t = r_cw.json(), r_tt.json()
                         ok = fc_c.get("type") == "FeatureCollection" and len(fc_c.get("features", [])) == 2
