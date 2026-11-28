@@ -241,6 +241,7 @@ fn stats_hist_pass2(
     let h_min = resolved.h_min;
     let h_max = resolved.h_max;
     let h_inv = resolved.h_inv_span;
+    let h_step = (h_max - h_min) / n_bins_f;
 
     while (idx < params.len) {
         let v = pixels[idx];
@@ -254,7 +255,14 @@ fn stats_hist_pass2(
 
             if (params.has_hist_range == 0u || (v >= h_min && v <= h_max)) {
                 let hf = floor((v - h_min) * h_inv * n_bins_f);
-                let hbin = u32(clamp(hf, 0.0, f32(max_bin)));
+                var hbin = u32(clamp(hf, 0.0, f32(max_bin)));
+                // Match numpy.histogram (`edges[i] <= v < edges[i + 1]`, last bin closed):
+                // correct 1-ULP rounding of `1.0 / (h_max - h_min)` at exact inner bin edges (#626).
+                if (hbin < max_bin && v >= f32(hbin + 1u) * h_step + h_min) {
+                    hbin = hbin + 1u;
+                } else if (hbin > 0u && v < f32(hbin) * h_step + h_min) {
+                    hbin = hbin - 1u;
+                }
                 atomicAdd(&sh_hist[hbin], 1u);
             }
         }

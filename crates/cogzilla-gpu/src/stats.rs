@@ -594,4 +594,48 @@ mod tests {
         assert!((stats.percentiles[1].1.unwrap() - cpu_p50).abs() < span * 0.002);
         assert!((stats.percentiles[2].1.unwrap() - cpu_p98).abs() < span * 0.002);
     }
+
+    #[test]
+    fn gpu_histogram_inner_bin_edge_ties_match_numpy() {
+        let Ok(ctx) = GpuContext::new(GpuOptions::default()) else {
+            eprintln!("skipping gpu_stats bin-edge test (no GPU adapter)");
+            return;
+        };
+        let mut reducer = GpuStatsReducer::new(&ctx);
+        for &(lo, hi, n_bins) in &[
+            (0.0f32, 3.0f32, 3usize),
+            (0.0, 7.0, 7),
+            (0.0, 10.0, 10),
+            (0.1, 0.8, 7),
+            (-5.0, 8.0, 13),
+        ] {
+            let step = (hi - lo) / (n_bins as f32);
+            let mut edges: Vec<f32> = (0..=n_bins).map(|k| (k as f32) * step + lo).collect();
+            edges[n_bins] = hi;
+            // Place 1 sample on every edge (0..=n_bins), plus 1 extra on each inner edge.
+            // Under numpy.histogram (`edges[i] <= v < edges[i+1]`, last bin closed):
+            // bin 0 gets edge 0 (count 1); inner bins 1..n_bins-1 get 2 samples each;
+            // last bin gets edge n_bins-1 (2 samples) + edge n_bins (1 sample) = 3 samples.
+            let mut data = Vec::new();
+            data.push(edges[0]);
+            for &e in &edges[1..n_bins] {
+                data.push(e);
+                data.push(e);
+            }
+            data.push(edges[n_bins]);
+
+            let stats = reducer
+                .reduce_f32(&data, None, n_bins, None, &[50.0])
+                .expect("gpu stats");
+            let mut expected = vec![0u64; n_bins];
+            for &v in &data {
+                let bin = edges[1..n_bins].partition_point(|&e| e <= v);
+                expected[bin] += 1;
+            }
+            assert_eq!(
+                stats.hist_counts, expected,
+                "GPU histogram bin-edge mismatch for [{lo}, {hi}] with {n_bins} bins"
+            );
+        }
+    }
 }
