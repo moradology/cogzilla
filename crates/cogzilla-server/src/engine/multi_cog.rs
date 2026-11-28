@@ -355,7 +355,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_single_band::<N>(&plan, &src, &style)
-                }))
+                }).await)
             }
             BandRequest::Terrain {
                 band_1based,
@@ -386,7 +386,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, req.resample, || {
                     render_terrain_tile::<N>(&plan, &src, *algorithm, req.resample, req.format)
-                }))
+                }).await)
             }
             BandRequest::Dem {
                 band_1based,
@@ -430,7 +430,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_dem_algorithm::<N>(&plan, &src, *algorithm, pixel_size_m, &style)
-                }))
+                }).await)
             }
             BandRequest::Spectral1 {
                 expr,
@@ -466,7 +466,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath1::<N>(&plan, &src, *expr, &style)
-                }))
+                }).await)
             }
             BandRequest::SarRgb {
                 bands_1based,
@@ -492,7 +492,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_sar_rgb::<N>(&plan, &srcs, &style)
-                }))
+                }).await)
             }
             BandRequest::Spectral2 {
                 expr,
@@ -520,7 +520,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath2::<N>(&plan, &srcs, *expr, &style)
-                }))
+                }).await)
             }
             BandRequest::Spectral3 {
                 expr,
@@ -560,7 +560,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath3::<N>(&plan, &srcs, *expr, &style)
-                }))
+                }).await)
             }
             BandRequest::Rgb {
                 bands_1based,
@@ -590,7 +590,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_rgb_bands::<N>(&plan, &srcs, &style)
-                }))
+                }).await)
             }
             BandRequest::CustomExprRgb { .. }
             | BandRequest::CustomExprMulti { .. }
@@ -625,7 +625,7 @@ impl TileEngine {
                 }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_expr_vm::<N>(&plan, &ordered, prog, &style, (ifd.width, ifd.height))
-                }))
+                }).await)
             }
         }
     }
