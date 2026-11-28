@@ -264,20 +264,37 @@ pub fn retype_f32_npy_with(
         };
         prepare(retype_value_with_mask(x, mask_sample, nodata_fill))
     });
-    if kind == SampleType::Uint8
+    if matches!(kind, SampleType::Uint8 | SampleType::Uint16)
         && let Some(ms) = mask_slice
     {
         write_npy_typed_planes(&mut out, kind, data, None::<std::iter::Empty<bool>>);
-        for v in ms.chunks_exact(4) {
-            let m = f32::from_le_bytes([v[0], v[1], v[2], v[3]]);
-            let b = if !m.is_finite() || m <= 0.0 {
-                0u8
-            } else if m >= 255.0 {
-                255u8
-            } else {
-                m.round() as u8
-            };
-            out.push(b);
+        if kind == SampleType::Uint8 {
+            for v in ms.chunks_exact(4) {
+                let m = f32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+                let b = if !m.is_finite() || m <= 0.0 {
+                    0u8
+                } else if m >= 255.0 {
+                    255u8
+                } else {
+                    m.round() as u8
+                };
+                out.push(b);
+            }
+        } else {
+            // Preserve continuous 0..=65535 alpha for uint16 RGBA / Gray+Alpha rasters.
+            // f32 has 24-bit significand precision, so scaling 0..=65535 -> 0..=255 -> 0..=65535
+            // round-trips every u16 value bit-exactly.
+            for v in ms.chunks_exact(4) {
+                let m = f32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+                let u = if !m.is_finite() || m <= 0.0 {
+                    0u16
+                } else if m >= 255.0 {
+                    u16::MAX
+                } else {
+                    (f64::from(m) * (f64::from(u16::MAX) / 255.0)).round() as u16
+                };
+                out.extend_from_slice(&u.to_le_bytes());
+            }
         }
         return Some(Bytes::from(out));
     }
@@ -492,6 +509,32 @@ mod tests {
         let u8_body = npy_body(&u8_npy);
         assert_eq!(&u8_body[0..4], &[0u8, 10, 20, 30]);
         assert_eq!(&u8_body[4..8], &[0u8, 64, 128, 255]);
+
+        // Verify continuous uint16 alpha round-trips bit-exactly through 0..=255 f32 scaling.
+        let sample_u16s: [u16; 6] = [0, 1, 5000, 32768, 65534, 65535];
+        let mut raw_u16_bytes = Vec::with_capacity(sample_u16s.len() * 4);
+        let mut alpha_u16_f32 = Vec::with_capacity(sample_u16s.len());
+        for (i, &a) in sample_u16s.iter().enumerate() {
+            let v = if a == 0 { f32::NAN } else { (1000 + i * 500) as f32 };
+            raw_u16_bytes.extend_from_slice(&v.to_le_bytes());
+            alpha_u16_f32.push(a as f32 * (255.0 / 65535.0));
+        }
+        let wrapped16 = wrap_raw_f32_as_npy_with_alpha_mask(
+            Bytes::from(raw_u16_bytes),
+            1,
+            1,
+            sample_u16s.len() as u32,
+            Some(&alpha_u16_f32),
+            true,
+        );
+        let u16_npy = retype_f32_npy(&wrapped16, SampleType::Uint16, true).expect("retype u16");
+        let u16_body = npy_body(&u16_npy);
+        let u16_vals: Vec<u16> = u16_body
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(&u16_vals[..6], &[0, 1500, 2000, 2500, 3000, 3500]);
+        assert_eq!(&u16_vals[6..], &sample_u16s);
     }
 
     #[test]
