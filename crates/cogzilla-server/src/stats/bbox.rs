@@ -3060,9 +3060,15 @@ async fn render_bbox_core(
                     for (slot, &b1) in bands_1based.iter().enumerate() {
                         let r = get_band_refs(b1, slot);
                         let s = make_src!(&r);
-                        coord_map.for_each_uv(w, h, |_, u, v| {
-                            out.put_slice(&sample(&s, u, v).to_le_bytes());
-                        });
+                        if let Some(p) = plane_of(&s) {
+                            for v in &p[..w * h] {
+                                out.put_slice(&v.to_le_bytes());
+                            }
+                        } else {
+                            coord_map.for_each_uv(w, h, |_, u, v| {
+                                out.put_slice(&sample(&s, u, v).to_le_bytes());
+                            });
+                        }
                     }
                 }
             }
