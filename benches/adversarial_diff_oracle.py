@@ -6511,6 +6511,20 @@ def main() -> int:
                 ("PARITY W72 INFO.GEOJSON NBITS=12 nodata=4095 scaled", "GET", f"/cog/info.geojson?url={q(s['w67_nbits12_nodata_scaled'])}", None, "info_geojson_w23"),
                 ("PARITY W72 INFO.GEOJSON ROT90 (a=0,e=0)", "GET", f"/cog/info.geojson?url={q(s['w69_rot90_4326'])}", None, "info_geojson_w23"),
                 ("BETTER W72 INFO.GEOJSON MIRROR-X (a<0) valid bounds (cw minx<maxx, tt inverted)", "GET", f"/cog/info.geojson?url={q(s['w69_mirror_x_4326'])}", None, "better_w72_mirror_info"),
+                # --- Wave 73: Non-3857 TMS GeoTIFF (.tif) outputs + deep OGC Maps API (/cog/map & /stac/map) ---
+                ("PARITY W73 TMS WorldCRS84Quad tile .tif (EPSG:4326)", "GET", f"/cog/tiles/WorldCRS84Quad/10/{morecantile.tms.get('WorldCRS84Quad').tile(-122.25, 37.75, 10).x}/{morecantile.tms.get('WorldCRS84Quad').tile(-122.25, 37.75, 10).y}.tif?url={q(s['w55_f32_imask'])}", None, "geotiff"),
+                ("PARITY W73 TMS WorldMercatorWGS84Quad tile .tif (EPSG:3395)", "GET", f"/cog/tiles/WorldMercatorWGS84Quad/10/{morecantile.tms.get('WorldMercatorWGS84Quad').tile(-122.25, 37.75, 10).x}/{morecantile.tms.get('WorldMercatorWGS84Quad').tile(-122.25, 37.75, 10).y}.tif?url={q(s['w55_f32_imask'])}", None, "geotiff"),
+                ("PARITY W73 TMS EuropeanETRS89_LAEAQuad tile .tif (EPSG:3035)", "GET", f"/cog/tiles/EuropeanETRS89_LAEAQuad/6/{morecantile.tms.get('EuropeanETRS89_LAEAQuad').tile(10.5, 48.5, 6).x}/{morecantile.tms.get('EuropeanETRS89_LAEAQuad').tile(10.5, 48.5, 6).y}.tif?url={q(s['w24_eu'])}", None, "geotiff"),
+                ("PARITY W73 STAC TMS WorldCRS84Quad unscale=true .tif", "GET", f"/stac/tiles/WorldCRS84Quad/10/{morecantile.tms.get('WorldCRS84Quad').tile(-122.25, 37.65, 10).x}/{morecantile.tms.get('WorldCRS84Quad').tile(-122.25, 37.65, 10).y}.tif?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true", None, "geotiff"),
+                ("PARITY W73 OGC /cog/map f=tif 4326 unscale=true", "GET", f"/cog/map?url={q(s['w67_nbits12_nodata_scaled'])}&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&unscale=true&f=tif", None, "geotiff"),
+                ("PARITY W73 OGC /cog/map f=tif bbox-crs=3857 crs=3857", "GET", f"/cog/map?url={q(s['w55_f32_imask'])}&bbox=-13631071,4516059,-13586543,4572377&bbox-crs={qe('http://www.opengis.net/def/crs/EPSG/0/3857')}&crs={qe('http://www.opengis.net/def/crs/EPSG/0/3857')}&width=64&height=64&f=tif", None, "geotiff"),
+                ("PARITY W73 OGC /cog/map f=tif crs=32610 (UTM 10N)", "GET", f"/cog/map?url={q(s['w55_f32_imask'])}&bbox=-122.45,37.55,-122.05,37.95&crs={qe('http://www.opengis.net/def/crs/EPSG/0/32610')}&width=64&height=64&f=tif", None, "geotiff"),
+                ("PARITY W73 OGC /cog/map f=webp viridis + hole", "GET", f"/cog/map?url={q(s['w55_f32_imask'])}&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&rescale=0,300&colormap_name=viridis&f=webp", None, "png"),
+                ("PARITY W73 OGC /cog/map f=jpeg + color_formula", "GET", f"/cog/map?url={q(s['w43_rgb_nodata'])}&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&color_formula={qe('Gamma RGB 1.3')}&f=jpeg", None, "png"),
+                ("PARITY W73 OGC /cog/map f=png expression + viridis", "GET", f"/cog/map?url={q(s['w43_rgb_nodata'])}&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&expression={qe('(b2-b1)/(b2+b1+1)')}&rescale=-1,1&colormap_name=viridis&f=png", None, "png"),
+                ("BETTER W73 OGC /cog/map f=png algorithm=hillshade exact 64x64 (cw 64, tt 58)", "GET", f"/cog/map?url={q(merc)}&bbox=-122.45,37.65,-122.15,37.85&width=64&height=64&algorithm=hillshade&f=png", None, "better_w73_map_hillshade"),
+                ("PARITY W73 OGC /stac/map f=tif red+nir unscale=true", "GET", f"/stac/map?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&unscale=true&f=tif", None, "geotiff"),
+                ("PARITY W73 OGC /stac/map f=png 3857 expr+unscale+viridis", "GET", f"/stac/map?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&bbox=-13631071,4516059,-13586543,4572377&bbox-crs={qe('http://www.opengis.net/def/crs/EPSG/0/3857')}&crs={qe('http://www.opengis.net/def/crs/EPSG/0/3857')}&width=64&height=64&unscale=true&expression={qe('(b2-b1)/(b2+b1)')}&rescale=0,1&colormap_name=viridis&f=png", None, "png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7243,6 +7257,12 @@ def main() -> int:
                             hc, ht = jc["b1"]["histogram"], jt["b1"]["histogram"]
                             ok = len(hc[0]) == 5 and len(ht[0]) == 5 and max(abs(a - b) for a, b in zip(hc[1], ht[1])) < 1e-4
                             detail += f" bins={len(hc[0])} edges=[{hc[1][0]}..{hc[1][-1]}]"
+                    elif kind == "better_w73_map_hillshade":
+                        ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
+                        at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
+                        interior_mae = float(np.abs(ac[3:61, 3:61, :3].astype(float) - at[:, :, :3].astype(float)).mean()) if ac.shape == (64, 64, 4) and at.shape == (58, 58, 4) else 999.0
+                        ok = ac.shape == (64, 64, 4) and at.shape == (58, 58, 4) and interior_mae < 2.0 and float(ac[..., 0].std()) > 10.0
+                        detail = f"cw={ac.shape} tt={at.shape} interior_MAE={interior_mae:.2f}"
                     elif kind == "better_w72_mirror_info":
                         jc, jt = r_cw.json(), r_tt.json()
                         pc, pt = jc["properties"], jt["properties"]
