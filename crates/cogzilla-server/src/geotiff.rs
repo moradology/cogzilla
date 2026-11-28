@@ -343,8 +343,9 @@ pub(crate) fn geotiff_sample(kind: cogzilla_raster::SampleType) -> GeoTiffSample
 }
 
 /// A float32 GeoTIFF that [`write_geotiff`] made, rewritten in the sample type of `kind`, or
-/// `None` when `tif` is not such a file. Everything but the samples is kept: size, layout,
-/// photometric interpretation, extra samples, pixel size, corner and EPSG code. The
+/// `None` when `tif` is not such a file. Size, layout, pixel size, corner and EPSG code are
+/// kept; photometric interpretation and `ExtraSamples` are derived from `(data_bands, kind,
+/// mask)` to match GDAL (only 3-band `Uint8` uses `RGB`, all others use `MinIsBlack`). The
 /// `GDAL_NODATA` of `nan` goes, as TiTiler writes none. Values are cast as
 /// `cogzilla_kernel::retype_f32_npy` casts them; with `mask`, the last band is the mask,
 /// written as the type's largest number where it is not zero and its smallest where it is.
@@ -400,12 +401,23 @@ pub(crate) fn retype_f32_geotiff_with(
         return None;
     }
     let src_bytes_per_sample = if is_f64 { 8usize } else { 4usize };
-    let photometric = match short(262)? {
-        1 => GeoTiffPhotometric::MinIsBlack,
-        2 => GeoTiffPhotometric::Rgb,
+    // Validate input photometric tag (1 = MinIsBlack, 2 = Rgb), then derive the output
+    // photometric & ExtraSamples from the target dtype matching GDAL: only 3-band uint8 is RGB.
+    match short(262)? {
+        1 | 2 => {}
         _ => return None,
+    }
+    let data_bands = bands - u16::from(mask);
+    let is_rgb = data_bands == 3 && matches!(kind, cogzilla_raster::SampleType::Uint8);
+    let photometric = if is_rgb {
+        GeoTiffPhotometric::Rgb
+    } else {
+        GeoTiffPhotometric::MinIsBlack
     };
-    let extra = if tags.contains_key(&338) { shorts(338)? } else { Vec::new() };
+    let photo_bands = if is_rgb { 3u16 } else { 1u16 };
+    let extra: Vec<u16> = (photo_bands..bands)
+        .map(|b| if mask && b + 1 == bands { 2 } else { 0 })
+        .collect();
     let planar = short(284)? == 2;
     let scale_at = long(33550)? as usize;
     let tie_at = long(33922)? as usize;
@@ -509,12 +521,14 @@ pub(crate) fn write_geotiff_typed_f64(
 ) -> Bytes {
     let pixels = (width as usize) * (height as usize);
     let total_bands = (bands + usize::from(return_mask)) as u16;
-    let photometric = if bands == 3 {
+    // Match GDAL: only 3-band uint8 defaults to Photometric=RGB; all other dtypes use MinIsBlack.
+    let is_rgb = bands == 3 && matches!(kind, cogzilla_raster::SampleType::Uint8);
+    let photometric = if is_rgb {
         GeoTiffPhotometric::Rgb
     } else {
         GeoTiffPhotometric::MinIsBlack
     };
-    let photo_bands = if bands == 3 { 3 } else { 1 };
+    let photo_bands = if is_rgb { 3 } else { 1 };
     let mut extra: Vec<u16> = Vec::new();
     for b in photo_bands..bands {
         let _ = b;
@@ -664,13 +678,9 @@ pub fn encode_geotiff_f32(
     };
     let spp: u16 = if return_mask { data_spp + 1 } else { data_spp };
     let pixel_bytes = n_px * (spp as usize) * 4;
-    // RGB when data has 3 bands, MinIsBlack otherwise
-    let photometric =
-        if data_spp == 3 { GeoTiffPhotometric::Rgb } else { GeoTiffPhotometric::MinIsBlack };
-    let extra_samples_count: u16 = match photometric {
-        GeoTiffPhotometric::Rgb => spp.saturating_sub(3),
-        GeoTiffPhotometric::MinIsBlack => spp.saturating_sub(1),
-    };
+    // Float32 GeoTIFFs always use MinIsBlack (GDAL only defaults to RGB for 3-band uint8).
+    let photometric = GeoTiffPhotometric::MinIsBlack;
+    let extra_samples_count: u16 = spp.saturating_sub(1);
     let mut extra_samples = Vec::with_capacity(extra_samples_count as usize);
     for idx in 0..extra_samples_count {
         let is_mask = return_mask && idx + 1 == extra_samples_count;
@@ -951,13 +961,13 @@ mod golden_tests {
         ("f32 1 band holes 8x8 4326 mask", 822, 0xe58604386c30557b1ce5dbc5dfdfa66f),
         ("f32 2 bands 8x8 3857", 822, 0xfd4ce31b6df242eeb08d326262699eac),
         ("f32 2 bands 8x8 3857 mask", 1090, 0x11265b727a01fe9311caf16178e1ac38),
-        ("f32 3 bands 7x3 4326", 562, 0x632fddbcee08f0ad83c0c80e621bb1a6),
-        ("f32 3 bands 7x3 4326 mask", 662, 0xa11fd9350bf4823646aedcd728e2b2f1),
-        ("f32 3 bands 7x3 antimeridian 4326", 562, 0xaf6e112717a280ed5655be47dc8bea25),
-        ("f32 3 bands 7x3 antimeridian 3857", 562, 0xeacca17411ba330b65b2c907c25b1bb1),
-        ("f32 3 bands 7x3 32633 mask", 662, 0xb88f10ed14fcd11e3bf56d9be6716abe),
-        ("f32 3 bands 7x3 4269 geographic", 562, 0xe41253ffd99587bff9bfca6a8d041235),
-        ("f32 3 bands 7x3 unknown epsg", 662, 0x2753918e75e330db5a7e0db6bd8b1949),
+        ("f32 3 bands 7x3 4326", 574, 0x0c890f0aa9924e51f88e4f308d1348c2),
+        ("f32 3 bands 7x3 4326 mask", 668, 0x8a401a604a138d3f2e1ec5dea40727fc),
+        ("f32 3 bands 7x3 antimeridian 4326", 574, 0x95d0d5edc0507cd44bb6154c2b0c3cb1),
+        ("f32 3 bands 7x3 antimeridian 3857", 574, 0xa89793beb7fec3fd6cffcda94e003f8d),
+        ("f32 3 bands 7x3 32633 mask", 668, 0x4535b7b0062e7d069cecc358c66c4f4f),
+        ("f32 3 bands 7x3 4269 geographic", 574, 0x5abb9c439762c34563b8bdedfd76d8d1),
+        ("f32 3 bands 7x3 unknown epsg", 668, 0xdb6fe5cae20f1df19914485f82cae1ac),
         ("f32 4 bands 3x9 3857", 764, 0xc4bf027ac462ad26a47c425ad6cb078a),
         ("f32 4 bands 3x9 3857 mask", 878, 0x5cb9dbbfdb3238bd60657adf68bcb841),
         ("f32 5 bands 4x4 3857", 658, 0x205b3b62431759c71f590198d3831d3c),
@@ -1352,6 +1362,36 @@ mod writer_tests {
             assert!(ifd.out_of_line(ifd.entry(tag)).is_some(), "tag {tag}");
         }
         assert_eq!(ifd.longs(279), [120; 6]);
+    }
+
+    #[test]
+    fn non_uint8_three_band_geotiffs_use_minisblack_matching_gdal() {
+        use cogzilla_raster::SampleType as T;
+        let bbox = [0.0, 0.0, 2.0, 1.0];
+        let f32s: Vec<u8> = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        // 3-band Float32 with mask -> MinIsBlack (1), ExtraSamples=[0, 0, 2]
+        let f32_tif = encode_geotiff_f32(2, 1, &f32s, bbox, 4326, true);
+        let ifd = read_ifd(&f32_tif);
+        assert_eq!(ifd.shorts(262), [1]);
+        assert_eq!(ifd.shorts(338), [0, 0, 2]);
+        // 3-band Float64 with mask -> MinIsBlack (1), ExtraSamples=[0, 0, 2]
+        let f64_tif = write_geotiff_typed_f64(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3, 2, 1, T::Float64, bbox, 4326, true);
+        let ifd = read_ifd(&f64_tif);
+        assert_eq!(ifd.shorts(262), [1]);
+        assert_eq!(ifd.shorts(338), [0, 0, 2]);
+        // 3-band Uint16 retyped from f32 with mask -> MinIsBlack (1), ExtraSamples=[0, 0, 2]
+        let u16_tif = retype_f32_geotiff(&f32_tif, T::Uint16, true).unwrap();
+        let ifd = read_ifd(&u16_tif);
+        assert_eq!(ifd.shorts(262), [1]);
+        assert_eq!(ifd.shorts(338), [0, 0, 2]);
+        // 3-band Uint8 retyped from f32 with mask -> Rgb (2), ExtraSamples=[2]
+        let u8_tif = retype_f32_geotiff(&f32_tif, T::Uint8, true).unwrap();
+        let ifd = read_ifd(&u8_tif);
+        assert_eq!(ifd.shorts(262), [2]);
+        assert_eq!(ifd.shorts(338), [2]);
     }
 
     #[test]
