@@ -13,7 +13,7 @@ bytes.workspace = true
 crc32fast.workspace = true
 libdeflater.workspace = true
 libwebp-sys.workspace = true
-jpeg-encoder.workspace = true
+mozjpeg.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

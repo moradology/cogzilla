@@ -5,7 +5,7 @@ WORKDIR /src
 # Install the tiny (~150 KB, libc-only) Vulkan loader so `docker run --gpus all`
 # can auto-detect hardware GPUs while CPU-only hosts still fall back cleanly to CPU.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libvulkan1 \
+    && apt-get install -y --no-install-recommends libvulkan1 nasm \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 # .cargo/config.toml sets target-cpu=native; default to empty RUSTFLAGS so the

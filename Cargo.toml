@@ -35,7 +35,7 @@ libdeflater = "1.22"
 brotli = { version = "8", default-features = false, features = ["std"] }
 zstd-sys = "2"
 libwebp-sys = "0.11"
-jpeg-encoder = "0.6"
+mozjpeg = { version = "0.10", default-features = false, features = ["nasm_simd", "parallel"] }
 zune-jpeg = "0.4"
 lerc-core = "=0.5.2"
 lerc-reader = { version = "=0.5.2", default-features = false }

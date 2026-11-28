@@ -2,25 +2,51 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use bytes::Bytes;
-use jpeg_encoder::{ColorType, Encoder};
+use mozjpeg::{ColorSpace, Compress};
 
 thread_local! {
     static JPEG_RGB_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static JPEG_OUT_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+fn encode_mozjpeg(width: u32, height: u32, color: ColorSpace, pixels: &[u8], quality: u8) -> Bytes {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 {
+        return Bytes::new();
+    }
+    JPEG_OUT_SCRATCH.with(|cell| {
+        let mut out = cell.borrow_mut();
+        out.clear();
+        let target_cap = (pixels.len() / 6).max(16 * 1024);
+        if out.capacity() < target_cap {
+            out.reserve(target_cap);
+        }
+        let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> std::io::Result<()> {
+            let mut comp = Compress::new(color);
+            comp.set_fastest_defaults();
+            comp.set_size(w, h);
+            comp.set_quality(quality.clamp(1, 100) as f32);
+            let mut started = comp.start_compress(&mut *out)?;
+            started.write_scanlines(pixels)?;
+            started.finish()?;
+            Ok(())
+        }));
+        if !matches!(encoded, Ok(Ok(()))) {
+            return Bytes::new();
+        }
+        let bytes = Bytes::copy_from_slice(&out);
+        if out.capacity() > 4 * 1024 * 1024 {
+            *out = Vec::new();
+        }
+        bytes
+    })
 }
 
 fn encode_jpeg_rgb_raw(width: u32, height: u32, rgb: &[u8], quality: u8) -> Bytes {
-    let (Ok(w), Ok(h)) = (u16::try_from(width), u16::try_from(height)) else {
-        return Bytes::new();
-    };
-    let mut out = Vec::with_capacity(rgb.len() / 6);
-    let enc = Encoder::new(&mut out, quality.clamp(1, 100));
-    if enc.encode(rgb, w, h, ColorType::Rgb).is_err() {
-        return Bytes::new();
-    }
-    Bytes::from(out)
+    encode_mozjpeg(width, height, ColorSpace::JCS_RGB, rgb, quality)
 }
 
-/// Encode an RGB8 buffer to JPEG via pure-Rust SIMD `jpeg-encoder`.
+/// Encode an RGB8 buffer to JPEG via SIMD `mozjpeg` (baseline fastest).
 /// Automatically emits 1-component `Luma` JPEG when all pixels have `r == g == b`.
 pub fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8], quality: u8) -> Bytes {
     let pixels = (width as usize).saturating_mul(height as usize);
@@ -46,17 +72,9 @@ pub fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8], quality: u8) -> Byte
     encode_jpeg_rgb_raw(width, height, rgb, quality)
 }
 
-/// Encode a 1-channel Grayscale (`Luma`) buffer to JPEG via pure-Rust SIMD `jpeg-encoder`.
+/// Encode a 1-channel Grayscale (`Luma`) buffer to JPEG via SIMD `mozjpeg` (baseline fastest).
 pub fn encode_jpeg_gray(width: u32, height: u32, gray: &[u8], quality: u8) -> Bytes {
-    let (Ok(w), Ok(h)) = (u16::try_from(width), u16::try_from(height)) else {
-        return Bytes::new();
-    };
-    let mut out = Vec::with_capacity(gray.len() / 4);
-    let enc = Encoder::new(&mut out, quality.clamp(1, 100));
-    if enc.encode(gray, w, h, ColorType::Luma).is_err() {
-        return Bytes::new();
-    }
-    Bytes::from(out)
+    encode_mozjpeg(width, height, ColorSpace::JCS_GRAYSCALE, gray, quality)
 }
 
 /// Encode an RGBA8 buffer to JPEG (stripping alpha onto black background, matching TiTiler).
@@ -133,5 +151,37 @@ pub fn empty_black_jpeg(size: u32) -> Bytes {
             &vec![0u8; (other as usize) * (other as usize) * 3],
             85,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mozjpeg_encodes_valid_rgb_gray_rgba_and_empty_black() {
+        let mut rgb = vec![0u8; 64 * 64 * 3];
+        for (i, px) in rgb.chunks_exact_mut(3).enumerate() {
+            px[0] = (i & 0xff) as u8;
+            px[1] = ((i * 3) & 0xff) as u8;
+            px[2] = ((i * 7) & 0xff) as u8;
+        }
+        let jpg_rgb = encode_jpeg_rgb(64, 64, &rgb, 85);
+        assert!(jpg_rgb.starts_with(&[0xFF, 0xD8, 0xFF]));
+        assert!(jpg_rgb.ends_with(&[0xFF, 0xD9]));
+
+        let gray: Vec<u8> = (0..64 * 64).map(|i| (i & 0xff) as u8).collect();
+        let jpg_gray = encode_jpeg_gray(64, 64, &gray, 85);
+        assert!(jpg_gray.starts_with(&[0xFF, 0xD8, 0xFF]));
+        assert!(jpg_gray.ends_with(&[0xFF, 0xD9]));
+
+        let rgba = vec![128u8; 32 * 32 * 4];
+        let jpg_rgba = encode_jpeg_rgba(32, 32, &rgba, 85);
+        assert!(jpg_rgba.starts_with(&[0xFF, 0xD8, 0xFF]));
+        assert!(jpg_rgba.ends_with(&[0xFF, 0xD9]));
+
+        let empty = empty_black_jpeg(256);
+        assert!(empty.starts_with(&[0xFF, 0xD8, 0xFF]));
+        assert!(empty.ends_with(&[0xFF, 0xD9]));
     }
 }
