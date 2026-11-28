@@ -1189,14 +1189,16 @@ pub(super) fn widened_plane_separable_into_with_tables(
     WIDE_SCRATCH.with(|cell| {
         let mut guard = cell.borrow_mut();
         let sc = &mut *guard;
-        // Columns / rows the passes handle: sample point in range and, on clean data, the whole
-        // footprint inside the raster (taps outside it are skipped like nodata on the other path).
+        // Columns / rows the passes handle: sample point in range and, on clean or positive-kernel
+        // data, the whole footprint inside the raster (border pixels whose kernel overhangs the
+        // raster fall through to `sample_kernel_widened`, which compares against `0.5 * in_wtot`).
+        let need_inbounds = clean || positive;
         sc.col_ok.clear();
         let mut all_cols_ok = true;
         for k in 0..w {
             let (st, t) = cols.taps(k);
             let ok = BandSource::axis_contains_sample(us[k], src.ifd_w)
-                && (!clean || (st >= 0 && st + t.len() as i32 <= src.ifd_w));
+                && (!need_inbounds || (st >= 0 && st + t.len() as i32 <= src.ifd_w));
             all_cols_ok &= ok;
             sc.col_ok.push(ok);
         }
@@ -1205,7 +1207,7 @@ pub(super) fn widened_plane_separable_into_with_tables(
             let (st, t) = rows.taps(k);
             sc.row_ok.push(
                 BandSource::axis_contains_sample(vs[k], src.ifd_h)
-                    && (!clean || (st >= 0 && st + t.len() as i32 <= src.ifd_h)),
+                    && (!need_inbounds || (st >= 0 && st + t.len() as i32 <= src.ifd_h)),
             );
         }
         let seg_w = if gc0 <= gc1 { (gc1 - gc0 + 1) as usize } else { 0 };
