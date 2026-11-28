@@ -5942,6 +5942,17 @@ def main() -> int:
                 ("PARITY W61 WEBP POST /feature donut 64x64.webp", "POST", f"/cog/feature/64x64.webp?url={q(s['w50_donut'])}&rescale=0,150&colormap_name=viridis", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "png"),
                 ("PARITY W61 GEOTIFF GET /preview 64x32.tif", "GET", f"/cog/preview/64x32.tif?url={q(s['w60_wide_4to1'])}", None, "geotiff"),
                 ("PARITY W61 GEOTIFF tile 3-band RGB uint8 .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w43_rgb_nodata'])}", None, "geotiff"),
+                # --- Wave 62: Interval JSON colormaps (neg/pos, semi-transparent alpha, out-of-range, unscale=true) & STAC GeoTIFF/WebP/3857 point ---
+                ("PARITY W62 INTERVAL CMAP neg/pos + alpha=128 + OOR .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w19_dem_f32'])}&colormap={qe(json.dumps([[[-30, 0], [0, 0, 255, 255]], [[0, 80], [0, 255, 0, 128]], [[80, 120], [255, 0, 0, 255]]]))}", None, "png"),
+                ("PARITY W62 INTERVAL CMAP GET /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w19_dem_f32'])}&colormap={qe(json.dumps([[[-30, 0], [0, 0, 255, 255]], [[0, 80], [0, 255, 0, 128]], [[80, 120], [255, 0, 0, 255]]]))}", None, "png"),
+                ("PARITY W62 INTERVAL CMAP POST /feature 64x64.png", "POST", f"/cog/feature/64x64.png?url={q(s['w19_dem_f32'])}&colormap={qe(json.dumps([[[-30, 0], [0, 0, 255, 255]], [[0, 80], [0, 255, 0, 128]], [[80, 120], [255, 0, 0, 255]]]))}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "png"),
+                ("PARITY W62 INTERVAL CMAP + unscale=true .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w53_neg_scale'])}&unscale=true&colormap={qe(json.dumps([[[30, 42], [0, 128, 255, 255]], [[42, 52], [255, 200, 0, 180]], [[52, 60], [200, 0, 80, 255]]]))}", None, "png"),
+                ("PARITY W62 STAC GET /bbox 5-band 64x64.tif", "GET", f"/stac/bbox/-122.4,37.6,-122.1,37.9/64x64.tif?url={q(s['w36_stac5b'])}&assets=ms", None, "geotiff"),
+                ("PARITY W62 STAC GET /bbox dst_crs=3857 64x64.tif", "GET", f"/stac/bbox/-122.4,37.6,-122.1,37.9/64x64.tif?url={q(s['w36_stac5b'])}&assets=ms&dst_crs=EPSG:3857", None, "geotiff"),
+                ("PARITY W62 STAC POST /feature coord_crs=3857 64x64.tif", "POST", f"/stac/feature/64x64.tif?url={q(s['w36_stac5b'])}&assets=ms&coord_crs=EPSG:3857", w37_poly_3857, "geotiff"),
+                ("PARITY W62 STAC tile expr .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w36_stac5b'])}&assets={qe('ms|expression=(b4-b3)/(b4+b3)')}", None, "geotiff"),
+                ("PARITY W62 STAC /point coord_crs=EPSG:3857", "GET", f"/stac/point/-13608804.60,4544181.28?url={q(s['w36_stac5b'])}&assets=ms&coord_crs=EPSG:3857", None, "point"),
+                ("PARITY W62 STAC tile RGB .webp", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.webp?url={q(s['w36_stac5b'])}&assets={qe('ms|bidx=1,2,3')}&rescale=0,255", None, "png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
