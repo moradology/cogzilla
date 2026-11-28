@@ -911,9 +911,10 @@ pub(super) fn parse_query(q: Option<&str>) -> ParsedQuery {
                 }
             }
             "tile_size" | "tilesize" | "size" => {
+                let max_ts = crate::config::Config::global().max_tilesize;
                 match parse_u32_like(v) {
-                    Some(sz) if (1..=2048).contains(&sz) => pq.tile_size = sz,
-                    _ => bad("expected a tile size from 1 to 2048"),
+                    Some(sz) if (1..=max_ts).contains(&sz) => pq.tile_size = sz,
+                    _ => bad(&format!("expected a tile size from 1 to {max_ts}")),
                 }
             }
             "scale" => match parse_u32_like(v) {

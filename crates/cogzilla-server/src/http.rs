@@ -2572,9 +2572,10 @@ fn apply_point_filters(
 }
 
 fn validate_mosaic_tile_params(_pq: &ParsedQuery, tile_size: u32) -> Result<(), EngineError> {
-    if !(64..=2048).contains(&tile_size) {
+    let max_ts = crate::config::Config::global().max_tilesize;
+    if !(64..=max_ts).contains(&tile_size) {
         return Err(EngineError::BadRequest(format!(
-            "mosaic tile_size must be in 64..=2048 (got {tile_size})"
+            "mosaic tile_size must be in 64..={max_ts} (got {tile_size})"
         )));
     }
     Ok(())
