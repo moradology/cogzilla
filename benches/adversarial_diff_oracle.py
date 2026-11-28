@@ -7404,8 +7404,8 @@ def main() -> int:
                 ("BETTER palette .npy raw indices (cw 2ch, tt 4ch)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.npy?url={q(palette)}", None, "better_palette_npy"),
                 ("STRICT 2-band Float32 .png (cw 400, tt 200)", "GET", f"/cog/tiles/WebMercatorQuad/12/652/1583.png?url={q(sat)}&bidx=1&bidx=2&rescale=0,0.35", None, "better_cw400_tt200"),
                 ("STRICT 2-band Uint16 .png (cw 400)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(rgbn_u16)}&bidx=1&bidx=2", None, "better_cw400"),
-                ("BETTER mask_1bit return_mask=false (valid match, collar zeroed)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_1bit)}&return_mask=false", None, "better_mask_zeroed"),
-                ("BETTER mask_rgba return_mask=false (valid match, collar zeroed)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_rgba)}&return_mask=false", None, "better_mask_zeroed"),
+                ("mask_1bit return_mask=false", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_1bit)}&return_mask=false", None, "img"),
+                ("mask_rgba return_mask=false", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_rgba)}&return_mask=false", None, "img"),
                 ("BETTER slope seamless 256x256 (cw 256, tt 250)", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.npy?url={q(merc)}&algorithm=slope", None, "better_slope_256"),
                 ("BETTER cast dtype=int16 (cw int16, tt hardcoded u8)", "GET", f"/cog/tiles/WebMercatorQuad/11/327/792.npy?url={q(s['neg_f32'])}&algorithm=cast&algorithm_params={qe(json.dumps({'dtype':'int16'}))}", None, "better_cast_i16"),
             ]

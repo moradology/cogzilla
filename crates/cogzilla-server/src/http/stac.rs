@@ -1228,7 +1228,8 @@ where
                         || pq_stac.nodata.is_some()
                         || pq_stac.custom_colormap_json.is_some()
                         || (!pq_stac.return_mask
-                            && matches!(treq.format, OutputFormat::Npy | OutputFormat::NpyF64))
+                            && (matches!(treq.format, OutputFormat::Npy | OutputFormat::NpyF64)
+                                || cogs.iter().any(|c| cogzilla_io::ifd_has_alpha_or_mask(c.index.full_res()))))
                         || (pq_stac.color_formula.is_some()
                             && !matches!(
                                 treq.bands,

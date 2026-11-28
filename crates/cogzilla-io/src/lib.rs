@@ -27,4 +27,4 @@ pub use cloud::{
 pub use disk_cache::{DiskBlockCache, DiskCacheStats};
 pub use limiter::{AimdLimiter, AimdPermit};
 pub use s3::{AwsCredentials, DynamicCredsCache, S3Config, fetch_s3_object, parse_s3_uri};
-pub use store::{CogStore, OpenedCog};
+pub use store::{CogStore, OpenedCog, ifd_has_alpha_or_mask};

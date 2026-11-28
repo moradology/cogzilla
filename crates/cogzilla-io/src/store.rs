@@ -7,7 +7,33 @@ use std::time::Duration;
 use cogzilla_codec::{
     BandData, DecodedTile, apply_alpha_band_to_tile, apply_mask_to_tile, decode_mask_tile_rows,
     decode_tile_rows_exact as decode_tile_rows,
+    decode_tile_rows_exact_unmasked as decode_tile_rows_unmasked,
 };
+
+/// Returns `true` if `ifd` carries an internal 1-bit transparency mask (`mask_ifd`) or an
+/// `ExtraSamples` alpha channel (e.g. RGBA / Gray+Alpha) whose zeroed pixels should be preserved
+/// verbatim when a caller requests `return_mask=false` (#620).
+#[inline]
+pub fn ifd_has_alpha_or_mask(ifd: &IfdMeta) -> bool {
+    ifd.mask_ifd.is_some()
+        || cogzilla_codec::alpha_channel_index(ifd.samples_per_pixel as usize, &ifd.extra_samples)
+            .is_some()
+}
+
+#[inline(always)]
+fn decode_tile_rows_for_mode<const APPLY_MASK: bool>(
+    compressed: &[u8],
+    ifd: &IfdMeta,
+    byte_order: cogzilla_tiff::ByteOrder,
+    nodata_f64: Option<f64>,
+    actual_rows: u32,
+) -> Result<DecodedTile, cogzilla_codec::CodecError> {
+    if APPLY_MASK {
+        decode_tile_rows(compressed, ifd, byte_order, nodata_f64, actual_rows)
+    } else {
+        decode_tile_rows_unmasked(compressed, ifd, byte_order, nodata_f64, actual_rows)
+    }
+}
 use cogzilla_tiff::{CogIndex, IfdMeta, PlanarConfig, TiffError, parse_cog, parse_cog_sparse};
 use dashmap::DashMap;
 
@@ -1262,6 +1288,27 @@ impl CogStore {
         ifd_idx: usize,
         tile_indices: &[Option<u32>],
     ) -> Result<Vec<Option<Arc<DecodedTile>>>, IoError> {
+        self.get_blocks_inner::<true>(cog, ifd_idx, tile_indices).await
+    }
+
+    /// Like [`Self::get_blocks`], but skips internal 1-bit mask and `ExtraSamples` alpha zeroing
+    /// so `return_mask=false` preserves raw underlying RGB/band samples (#620). Cached under a
+    /// distinct `BlockKey` namespace (`ifd_idx | 0x8000`) so it never pollutes masked tiles.
+    pub async fn get_blocks_unmasked(
+        &self,
+        cog: &OpenedCog,
+        ifd_idx: usize,
+        tile_indices: &[Option<u32>],
+    ) -> Result<Vec<Option<Arc<DecodedTile>>>, IoError> {
+        self.get_blocks_inner::<false>(cog, ifd_idx, tile_indices).await
+    }
+
+    async fn get_blocks_inner<const APPLY_MASK: bool>(
+        &self,
+        cog: &OpenedCog,
+        ifd_idx: usize,
+        tile_indices: &[Option<u32>],
+    ) -> Result<Vec<Option<Arc<DecodedTile>>>, IoError> {
         // Bound per-request block fan-out and cumulative decoded bytes so a hostile overview-less
         // TIFF cannot force tens of thousands of simultaneous block decodes into RAM.
         const MAX_BLOCKS_PER_REQUEST: usize = 512;
@@ -1329,7 +1376,9 @@ impl CogStore {
         }
 
         // Fast path: if local or already warm in cache, zero async overhead!
-        if let Some(fast) = self.try_get_blocks_sync(cog, ifd_idx, tile_indices)? {
+        if APPLY_MASK
+            && let Some(fast) = self.try_get_blocks_sync(cog, ifd_idx, tile_indices)?
+        {
             return Ok(fast);
         }
 
@@ -1357,7 +1406,11 @@ impl CogStore {
             }
             let key = BlockKey {
                 dataset_id: cog.id,
-                ifd_idx: ifd_idx as u16,
+                ifd_idx: if APPLY_MASK {
+                    ifd_idx as u16
+                } else {
+                    (ifd_idx as u16) | 0x8000
+                },
                 tile_idx,
             };
             match self.cache.acquire(key) {
@@ -1398,8 +1451,8 @@ impl CogStore {
                 && ifd.predictor == cogzilla_tiff::Predictor::None
                 && expected_bytes <= 256 * 1024;
 
-            let alpha_plane = planar_alpha_plane(ifd);
-            let no_sidecar_mask = ifd.mask_ifd.is_none() && alpha_plane.is_none();
+            let alpha_plane = if APPLY_MASK { planar_alpha_plane(ifd) } else { None };
+            let no_sidecar_mask = !APPLY_MASK || (ifd.mask_ifd.is_none() && alpha_plane.is_none());
 
             if is_local {
                 if heavy_block && no_sidecar_mask {
@@ -1430,7 +1483,7 @@ impl CogStore {
                                             available: 0,
                                         }));
                                     };
-                                    Ok::<_, IoError>(decode_tile_rows(
+                                    Ok::<_, IoError>(decode_tile_rows_for_mode::<APPLY_MASK>(
                                         slice, &meta, byte_order, nodata, rows,
                                     )?)
                                 })
@@ -1512,7 +1565,9 @@ impl CogStore {
                                         available: 0,
                                     }));
                                 };
-                                Ok(decode_tile_rows(slice, &meta, byte_order, nodata, rows)?)
+                                Ok(decode_tile_rows_for_mode::<APPLY_MASK>(
+                                    slice, &meta, byte_order, nodata, rows,
+                                )?)
                             })();
                             match res {
                                 Ok(decoded) => {
@@ -1565,9 +1620,11 @@ impl CogStore {
                             let rows = tile_indices[orig_slot]
                                 .map(|tidx| ifd.block_height(tidx))
                                 .unwrap_or(ifd.tile_height);
-                            let mut decoded =
-                                decode_tile_rows(slice, ifd, byte_order, nodata, rows)?;
-                            if let Some(mask_ifd) = ifd.mask_ifd.as_deref()
+                            let mut decoded = decode_tile_rows_for_mode::<APPLY_MASK>(
+                                slice, ifd, byte_order, nodata, rows,
+                            )?;
+                            if APPLY_MASK
+                                && let Some(mask_ifd) = ifd.mask_ifd.as_deref()
                                 && mask_ifd.tile_width == ifd.tile_width
                                     && mask_ifd.tile_height == ifd.tile_height
                                     && let Some(Some(tidx)) = tile_indices.get(orig_slot) {
@@ -1701,13 +1758,14 @@ impl CogStore {
                                     let decoded_opt = tokio::task::spawn_blocking(move || {
                                         let compressed = dc_c.read_verified_sync(key, &path)?;
                                         if compressed.len() == count as usize
-                                            && let Ok(decoded) = decode_tile_rows(
-                                                &compressed,
-                                                &m,
-                                                byte_order,
-                                                nodata,
-                                                rows,
-                                            ) {
+                                            && let Ok(decoded) =
+                                                decode_tile_rows_for_mode::<APPLY_MASK>(
+                                                    &compressed,
+                                                    &m,
+                                                    byte_order,
+                                                    nodata,
+                                                    rows,
+                                                ) {
                                                 return Some(Arc::new(decoded));
                                             }
                                         // Stale length or undecodable payload: evict from disk cache
@@ -1913,7 +1971,7 @@ impl CogStore {
                                                         })?;
                                                     let tile = tokio::task::spawn_blocking(
                                                         move || {
-                                                            decode_tile_rows(
+                                                            decode_tile_rows_for_mode::<APPLY_MASK>(
                                                                 &slice, &m, byte_order, nodata,
                                                                 rows,
                                                             )
@@ -1927,7 +1985,7 @@ impl CogStore {
                                                     })??;
                                                     Ok(tile)
                                                 } else {
-                                                    Ok(decode_tile_rows(
+                                                    Ok(decode_tile_rows_for_mode::<APPLY_MASK>(
                                                         &slice, &m, byte_order, nodata, rows,
                                                     )?)
                                                 }
@@ -1964,7 +2022,8 @@ impl CogStore {
                                         vec![None; span.items.len()];
                                     let mut sparse_transparent_by_slot: Vec<bool> =
                                         vec![false; span.items.len()];
-                                    if let Some(mask_ifd) = ifd.mask_ifd.as_deref()
+                                    if APPLY_MASK
+                                        && let Some(mask_ifd) = ifd.mask_ifd.as_deref()
                                         && mask_ifd.tile_width == ifd.tile_width
                                             && mask_ifd.tile_height == ifd.tile_height
                                         {
@@ -2171,7 +2230,7 @@ impl CogStore {
                                             .and_then(|o| *o)
                                             .map(|tidx| ifd.block_height(tidx))
                                             .unwrap_or(ifd.tile_height);
-                                        match decode_tile_rows(
+                                        match decode_tile_rows_for_mode::<APPLY_MASK>(
                                             &data[rel_start..rel_end],
                                             ifd,
                                             byte_order,
