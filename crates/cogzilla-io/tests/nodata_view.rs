@@ -127,3 +127,70 @@ async fn nodata_views_share_one_fill_tile() {
     assert!(store.cache.current_bytes() >= 16 * 16 * 4, "held in the block cache, under its budget");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Per GDAL `SPARSE_OK`, an unwritten sparse tile in a TIFF with NO `GDAL_NODATA` and no mask/alpha
+/// must decode as valid `0.0` pixels (not masked), while `?nodata=0` masks it.
+#[tokio::test]
+async fn sparse_tiff_without_nodata_reads_unwritten_tiles_as_valid_zeros() {
+    let dir = std::env::temp_dir().join(format!("cogzilla_sparse_no_nd_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sparse_u16_no_nd.tif");
+    let entries: [(u16, u16, u32, u32); 11] = [
+        (256, 3, 1, 32), // ImageWidth
+        (257, 3, 1, 16), // ImageLength
+        (258, 3, 1, 16), // BitsPerSample
+        (259, 3, 1, 1),  // Compression: none
+        (262, 3, 1, 1),  // MinIsBlack
+        (277, 3, 1, 1),  // SamplesPerPixel
+        (284, 3, 1, 1),  // PlanarConfiguration: chunky
+        (322, 3, 1, 16), // TileWidth
+        (323, 3, 1, 16), // TileLength
+        (324, 4, 2, 0),  // TileOffsets
+        (325, 4, 2, 0),  // TileByteCounts
+    ];
+    let ifd_len = 2 + entries.len() * 12 + 4;
+    let offsets_at = 8 + ifd_len as u32;
+    let counts_at = offsets_at + 8;
+    let data_at = counts_at + 8;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&42u16.to_le_bytes());
+    buf.extend_from_slice(&8u32.to_le_bytes());
+    buf.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, ty, count, val) in entries {
+        let val = match tag {
+            324 => offsets_at,
+            325 => counts_at,
+            _ => val,
+        };
+        buf.extend_from_slice(&tag.to_le_bytes());
+        buf.extend_from_slice(&ty.to_le_bytes());
+        buf.extend_from_slice(&count.to_le_bytes());
+        buf.extend_from_slice(&val.to_le_bytes());
+    }
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    for v in [0u32, data_at, 0, 16 * 16 * 2] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for _ in 0..16 * 16 {
+        buf.extend_from_slice(&7u16.to_le_bytes());
+    }
+    std::fs::write(&path, buf).unwrap();
+
+    let store = CogStore::new(16 * 1024 * 1024);
+    let cog = store.register_local("sparse_no_nd", &path).unwrap();
+    assert_eq!(cog.sparse_fill, Some(0.0));
+
+    let blocks = store.get_blocks(&cog, 0, &[Some(0), Some(1)]).await.unwrap();
+    let fill = &blocks[0].as_ref().expect("unwritten tile without nodata must be valid 0s").bands[0];
+    assert!(fill.stats.no_nodata && !fill.stats.all_nodata);
+    assert_eq!((fill.data.get_f32(0), fill.data.get_f32(255)), (0.0, 0.0));
+    assert_eq!(blocks[1].as_ref().unwrap().bands[0].data.get_f32(0), 7.0);
+
+    let nd0 = store.with_nodata(&cog, Some(0.0));
+    assert_eq!(nd0.sparse_fill, None);
+    let masked = store.get_blocks(&nd0, 0, &[Some(0)]).await.unwrap();
+    assert!(masked[0].is_none(), "?nodata=0 masks the unwritten 0-filled tile");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

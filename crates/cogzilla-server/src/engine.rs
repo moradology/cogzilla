@@ -2276,6 +2276,11 @@ impl TileEngine {
         };
 
         let Some((offset, byte_len)) = ifd.tile_byte_range(tx, ty, 0) else {
+            // When sparse tiles are valid fill data (e.g., no nodata / no mask), fall back to
+            // standard rendering rather than returning a transparent empty tile.
+            if cog.sparse_fill.is_some() {
+                return Ok(None);
+            }
             // Sparse empty internal tile -> short-circuit without decoding.
             self.stats
                 .empty_short_circuits

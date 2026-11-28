@@ -1563,6 +1563,46 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(f32_56, 1)
     out["w56_prime_f32_p3"] = p_w56_pf32
 
+    # Wave 57: Sparse GeoTIFFs (SPARSE_OK=TRUE, TileByteCounts==0 omitted tiles) with & without nodata,
+    # and 3-band uint16 with heterogeneous per-band (scale, offset)
+    yy57q, xx57q = np.mgrid[0:64, 0:64]
+    p_w57_sp_nd = synth_dir / "w57_sparse_nodata.tif"
+    with rasterio.open(
+        p_w57_sp_nd, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999.0, SPARSE_OK="TRUE",
+    ) as ds:
+        ds.write((20.0 + xx57q * 1.2 + yy57q * 0.8).astype(np.float32), 1, window=rasterio.windows.Window(0, 0, 64, 64))
+        ds.write((100.0 + xx57q * 1.5 + yy57q * 1.0).astype(np.float32), 1, window=rasterio.windows.Window(64, 64, 64, 64))
+    out["w57_sparse_nodata"] = p_w57_sp_nd
+
+    p_w57_sp_no_nd = synth_dir / "w57_sparse_no_nd.tif"
+    with rasterio.open(
+        p_w57_sp_no_nd, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", SPARSE_OK="TRUE",
+    ) as ds:
+        ds.write((100 + xx57q.astype(np.uint32) * 10 + yy57q.astype(np.uint32) * 5).astype(np.uint16), 1, window=rasterio.windows.Window(0, 0, 64, 64))
+        ds.write((500 + xx57q.astype(np.uint32) * 12 + yy57q.astype(np.uint32) * 8).astype(np.uint16), 1, window=rasterio.windows.Window(64, 64, 64, 64))
+    out["w57_sparse_no_nd"] = p_w57_sp_no_nd
+
+    p_w57_pb_sc = synth_dir / "w57_perband_scale_3b.tif"
+    b1_57 = (1000 + xx9.astype(np.uint32) * 20).astype(np.uint16)
+    b2_57 = (2000 + yy9.astype(np.uint32) * 30).astype(np.uint16)
+    b3_57 = (3000 + (xx9 + yy9).astype(np.uint32) * 15).astype(np.uint16)
+    b1_57[80:105, 60:85] = 65535
+    b2_57[80:105, 60:85] = 65535
+    b3_57[80:105, 60:85] = 65535
+    with rasterio.open(
+        p_w57_pb_sc, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=65535,
+    ) as ds:
+        ds.write(np.stack([b1_57, b2_57, b3_57]))
+        ds.scales = (0.001, 0.002, 0.005)
+        ds.offsets = (0.0, -1.0, 10.0)
+    out["w57_perband_scale_3b"] = p_w57_pb_sc
+
     return out
 
 
@@ -4193,6 +4233,7 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
         "W54 ZARR v3 blosc (v3 spec byte-shuffle+zlib) /bbox .npy",
         "W54 ZARR GET /tiles algorithm=hillshade .png",
         "W54 ZARR POST /feature donut coord_crs=EPSG:3857 .npy",
+        "W57 ZARR v3 standalone bitshuffle + gzip /bbox .npy",
     ]
     if not any(wanted(lb) for lb in labels):
         return 0
@@ -4513,6 +4554,7 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
         "W54 ZARR v3 blosc (v3 spec byte-shuffle+zlib) /bbox .npy",
         "W54 ZARR GET /tiles algorithm=hillshade .png",
         "W54 ZARR POST /feature donut coord_crs=EPSG:3857 .npy",
+        "W57 ZARR v3 standalone bitshuffle + gzip /bbox .npy",
     ]
     if any(wanted(l) for l in w44_labels):
         def _crc32c_w44(data: bytes) -> int:
@@ -4865,6 +4907,35 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
                             gpu_diffs.append({"label": lb, "detail": det_g})
             else:
                 rec(lb, False, f"HTTP {r_ft.status_code} {r_ft.text[:80]!r}", p_ft)
+
+        lb = "W57 ZARR v3 standalone bitshuffle + gzip /bbox .npy"
+        if wanted(lb):
+            bs_gz = zlib.compress(_bit_shuffle(raw44, 4), level=5, wbits=31)
+            z_bs3 = _mk_z3_w44(
+                "w57_z3_bitshuffle_gzip.zarr",
+                [
+                    {"name": "bytes", "configuration": {"endian": "little"}},
+                    {"name": "bitshuffle", "configuration": {"elementsize": 4}},
+                    {"name": "gzip", "configuration": {"level": 5}},
+                ],
+                bs_gz,
+            )
+            p_bb = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_bs3)}&variable=data"
+            rb = client.get(cw_base + p_bb)
+            if rb.status_code == 200:
+                ab = np.load(io.BytesIO(rb.content))
+                err = float(np.abs(ab[0] - arr44).max())
+                rec(lb, err < 1e-4, f"max_err={err:.5f}", p_bb)
+                if gpu_base:
+                    rbg = client.get(gpu_base + p_bb)
+                    if rbg.status_code != 200:
+                        gpu_diffs.append({"label": lb, "detail": f"GPU HTTP {rbg.status_code}"})
+                    else:
+                        ok_g, det_g = compare_npy(rb.content, rbg.content, check_values=True)
+                        if not ok_g:
+                            gpu_diffs.append({"label": lb, "detail": det_g})
+            else:
+                rec(lb, False, f"HTTP {rb.status_code} {rb.text[:80]!r}", p_bb)
 
     return ran
 
@@ -5681,6 +5752,17 @@ def main() -> int:
                 ("PARITY W56 PRIME 137x113 128x32 f32 DEFLATE P3 /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w56_prime_f32_p3'])}", None, "point"),
                 ("PARITY W56 TMS WorldCRS84Quad expr+bilinear .npy", "GET", f"/cog/tiles/WorldCRS84Quad/11/652/593.npy?url={q(sat)}&expression={qe('(b3-b1)/(b3+b1+0.01)')}&resampling=bilinear", None, "npy"),
                 ("PARITY W56 TMS WorldCRS84Quad expr+bilinear viridis .png", "GET", f"/cog/tiles/WorldCRS84Quad/11/652/593.png?url={q(sat)}&expression={qe('(b3-b1)/(b3+b1+0.01)')}&resampling=bilinear&rescale=-1,1&colormap_name=viridis", None, "png"),
+                # --- Wave 57: Sparse GeoTIFFs (SPARSE_OK=TRUE) with & without nodata, per-band heterogeneous (scale, offset) ---
+                ("PARITY W57 SPARSE TIFF nodata=-9999 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w57_sparse_nodata'])}", None, "npy"),
+                ("PARITY W57 SPARSE TIFF nodata=-9999 bilinear .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w57_sparse_nodata'])}&resampling=bilinear&rescale=20,260&colormap_name=viridis", None, "png"),
+                ("PARITY W57 SPARSE TIFF nodata=-9999 /point sparse tile", "GET", f"/cog/point/-122.40,37.60?url={q(s['w57_sparse_nodata'])}", None, "point"),
+                ("PARITY W57 SPARSE TIFF nodata=-9999 /statistics", "GET", f"/cog/statistics?url={q(s['w57_sparse_nodata'])}", None, "stats"),
+                ("PARITY W57 SPARSE TIFF no-nodata (valid 0s) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w57_sparse_no_nd'])}", None, "npy"),
+                ("PARITY W57 SPARSE TIFF no-nodata (valid 0s) /statistics", "GET", f"/cog/statistics?url={q(s['w57_sparse_no_nd'])}", None, "stats"),
+                ("PARITY W57 PER-BAND scale/offset 3b unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w57_perband_scale_3b'])}&unscale=true", None, "npy"),
+                ("PARITY W57 PER-BAND scale/offset 3b unscale+expr .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w57_perband_scale_3b'])}&unscale=true&expression={qe('(b3-b2)/(b1+1)')}", None, "npy"),
+                ("PARITY W57 PER-BAND scale/offset 3b unscale /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w57_perband_scale_3b'])}&unscale=true", None, "point"),
+                ("PARITY W57 PER-BAND scale/offset 3b unscale /statistics", "GET", f"/cog/statistics?url={q(s['w57_perband_scale_3b'])}&unscale=true", None, "stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
