@@ -368,6 +368,7 @@ fn wstats_hist_pass2(
     let inv_max_w = resolved.inv_max_w;
     let n_bins_f = f32(n_bins);
     let last_bin = n_bins - 1u;
+    let h_step = (h_max - h_min) / n_bins_f;
 
     while (idx < params.len) {
         let c = covs[idx];
@@ -399,6 +400,11 @@ fn wstats_hist_pass2(
                     if (h_inv > 0.0) {
                         let hf = (v - h_min) * h_inv;
                         hb = min(u32(hf * n_bins_f), last_bin);
+                        if (hb < last_bin && v >= f32(hb + 1u) * h_step + h_min) {
+                            hb = hb + 1u;
+                        } else if (hb > 0u && v < f32(hb) * h_step + h_min) {
+                            hb = hb - 1u;
+                        }
                     }
                     let cq = u32(round(clamp(c, 0.0, 1.0) * 64.0));
                     if (cq > 0u) {
