@@ -362,14 +362,26 @@ fn xyz_bounds_and_http_error_status_mapping() {
     assert_eq!(pq.resample, ResampleMode::Nearest);
     assert_eq!(pq.reproject, ResampleMode::Nearest);
     let u8t = cogzilla_raster::SampleType::Uint8;
-    // WebMercatorQuad at z=2 has 4x4 tiles (0..=3)
+    // WebMercatorQuad at z=2 has 4x4 tiles (0..=3); out-of-matrix coords return 404 NotFound (#624)
     assert!(build_tile_request(None, TileCoord { z: 2, x: 3, y: 3 }, None, Some("png"), &pq, 3, u8t, false, None).is_ok());
-    assert!(build_tile_request(None, TileCoord { z: 2, x: 4, y: 0 }, None, Some("png"), &pq, 3, u8t, false, None).is_err());
-    assert!(build_tile_request(None, TileCoord { z: 2, x: 0, y: 4 }, None, Some("png"), &pq, 3, u8t, false, None).is_err());
+    assert!(matches!(
+        build_tile_request(None, TileCoord { z: 2, x: 4, y: 0 }, None, Some("png"), &pq, 3, u8t, false, None),
+        Err(EngineError::NotFound(_))
+    ));
+    assert!(matches!(
+        build_tile_request(None, TileCoord { z: 2, x: 0, y: 4 }, None, Some("png"), &pq, 3, u8t, false, None),
+        Err(EngineError::NotFound(_))
+    ));
     // WorldCRS84Quad at z=2 has 8x4 tiles (x: 0..=7, y: 0..=3)
     assert!(build_tile_request(None, TileCoord { z: 2, x: 7, y: 3 }, None, Some("png"), &pq, 3, u8t, true, None).is_ok());
-    assert!(build_tile_request(None, TileCoord { z: 2, x: 8, y: 0 }, None, Some("png"), &pq, 3, u8t, true, None).is_err());
-    assert!(build_tile_request(None, TileCoord { z: 2, x: 0, y: 4 }, None, Some("png"), &pq, 3, u8t, true, None).is_err());
+    assert!(matches!(
+        build_tile_request(None, TileCoord { z: 2, x: 8, y: 0 }, None, Some("png"), &pq, 3, u8t, true, None),
+        Err(EngineError::NotFound(_))
+    ));
+    assert!(matches!(
+        build_tile_request(None, TileCoord { z: 2, x: 0, y: 4 }, None, Some("png"), &pq, 3, u8t, true, None),
+        Err(EngineError::NotFound(_))
+    ));
 
     // ?reproject= is accepted and parsed independently from ?resampling=
     let pq_rp = parse_query(Some("resampling=bilinear&reproject=cubic"));

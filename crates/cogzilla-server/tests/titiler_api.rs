@@ -2371,13 +2371,21 @@ async fn uniform_semantic_http_statuses_across_all_tms() {
     let base = format!("http://{addr}");
     let client = reqwest::Client::new();
 
-    // 1. Out-of-matrix x returns 400 Bad Request
+    // 1. Out-of-matrix x returns 404 Not Found (matching TiTiler & slippy-map clients),
+    //    while malformed non-integer coordinates still return 400 Bad Request.
     let bad_x = client
         .get(format!("{base}/cog/tiles/WebMercatorQuad/4/99/0.png?url={utm_url}"))
         .send()
         .await
         .unwrap();
-    assert_eq!(bad_x.status(), 400, "out-of-matrix x must return 400");
+    assert_eq!(bad_x.status(), 404, "out-of-matrix x must return 404");
+
+    let malformed_x = client
+        .get(format!("{base}/cog/tiles/WebMercatorQuad/4/abc/0.png?url={utm_url}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed_x.status(), 400, "malformed non-integer x must return 400");
 
     // 2. Every single one of the 13 TileMatrixSets returns 404 for a valid tile outside the UTM file
     let outside_tiles = [
