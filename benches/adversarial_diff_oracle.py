@@ -1524,6 +1524,45 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.build_overviews([2, 4, 8], rasterio.enums.Resampling.average)
     out["w55_multi_ovr_unscale"] = p_w55_ovr
 
+    # Wave 56: ?nodata= query override + unscale=true, and prime-dimension (137x113) partial edge tiles
+    # with rectangular 128x32 blocks + Predictor=2 (int16 ZSTD) & Predictor=3 (float32 DEFLATE)
+    p_w56_sc = synth_dir / "w56_scaled_no_nd.tif"
+    dn56 = (2000 + xx9.astype(np.uint32) * 35 + yy9.astype(np.uint32) * 25).astype(np.uint16)
+    dn56[80:110, 60:90] = 1000  # sentinel DN (not declared as TIFF nodata; supplied via ?nodata=1000)
+    with rasterio.open(
+        p_w56_sc, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64, compress="deflate",
+    ) as ds:
+        ds.write(dn56, 1)
+        ds.scales = (0.01,)
+        ds.offsets = (-50.0,)
+    out["w56_scaled_no_nd"] = p_w56_sc
+
+    yy56, xx56 = np.mgrid[0:113, 0:137]
+    tf_w56_p = from_bounds(-122.5, 37.5, -122.0, 38.0, 137, 113)
+
+    p_w56_pi16 = synth_dir / "w56_prime_i16_p2.tif"
+    i16_56 = (-500 + xx56.astype(np.int32) * 25 + yy56.astype(np.int32) * 15).astype(np.int16)
+    i16_56[70:100, 65:135] = -32768  # crosses right partial edge tile (cols 128..137)
+    with rasterio.open(
+        p_w56_pi16, "w", driver="GTiff", width=137, height=113, count=1, dtype="int16",
+        crs="EPSG:4326", transform=tf_w56_p, tiled=True, blockxsize=128, blockysize=32,
+        compress="zstd", predictor=2, nodata=-32768,
+    ) as ds:
+        ds.write(i16_56, 1)
+    out["w56_prime_i16_p2"] = p_w56_pi16
+
+    p_w56_pf32 = synth_dir / "w56_prime_f32_p3.tif"
+    f32_56 = (10.25 + xx56 * 1.75 + yy56 * 0.625).astype(np.float32)
+    f32_56[70:112, 65:135] = -9999.0  # crosses both right (128..137) & bottom (96..113) partial edge tiles
+    with rasterio.open(
+        p_w56_pf32, "w", driver="GTiff", width=137, height=113, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w56_p, tiled=True, blockxsize=128, blockysize=32,
+        compress="deflate", predictor=3, nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_56, 1)
+    out["w56_prime_f32_p3"] = p_w56_pf32
+
     return out
 
 
@@ -5631,6 +5670,17 @@ def main() -> int:
                 ("PARITY W55 NON-SQUARE 4:1 /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w55_nonsquare_4to1'])}", None, "point"),
                 ("PARITY W55 MULTI-OVR unscale=true z10 bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_multi_ovr_unscale'])}&unscale=true&resampling=bilinear", None, "npy"),
                 ("PARITY W55 MULTI-OVR unscale=true z8 bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.npy?url={q(s['w55_multi_ovr_unscale'])}&unscale=true&resampling=bilinear", None, "npy"),
+                # --- Wave 56: ?nodata= override + unscale=true, prime-dim 137x113 rectangular 128x32 partial edge tiles (P2/P3), WorldCRS84Quad expr+bilinear ---
+                ("PARITY W56 NODATA+UNSCALE ?nodata=1000&unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w56_scaled_no_nd'])}&nodata=1000&unscale=true", None, "npy"),
+                ("PARITY W56 NODATA+UNSCALE ?nodata=1000&unscale=true .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w56_scaled_no_nd'])}&nodata=1000&unscale=true&rescale=-30,50&colormap_name=viridis", None, "png"),
+                ("PARITY W56 NODATA+UNSCALE ?nodata=1000&unscale=true /point hole", "GET", f"/cog/point/-122.20,37.65?url={q(s['w56_scaled_no_nd'])}&nodata=1000&unscale=true", None, "point"),
+                ("PARITY W56 NODATA+UNSCALE ?nodata=1000&unscale=true /statistics", "GET", f"/cog/statistics?url={q(s['w56_scaled_no_nd'])}&nodata=1000&unscale=true", None, "stats"),
+                ("PARITY W56 PRIME 137x113 128x32 i16 ZSTD P2 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w56_prime_i16_p2'])}", None, "npy"),
+                ("PARITY W56 PRIME 137x113 128x32 i16 ZSTD P2 /statistics", "GET", f"/cog/statistics?url={q(s['w56_prime_i16_p2'])}", None, "stats"),
+                ("PARITY W56 PRIME 137x113 128x32 f32 DEFLATE P3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w56_prime_f32_p3'])}", None, "npy"),
+                ("PARITY W56 PRIME 137x113 128x32 f32 DEFLATE P3 /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w56_prime_f32_p3'])}", None, "point"),
+                ("PARITY W56 TMS WorldCRS84Quad expr+bilinear .npy", "GET", f"/cog/tiles/WorldCRS84Quad/11/652/593.npy?url={q(sat)}&expression={qe('(b3-b1)/(b3+b1+0.01)')}&resampling=bilinear", None, "npy"),
+                ("PARITY W56 TMS WorldCRS84Quad expr+bilinear viridis .png", "GET", f"/cog/tiles/WorldCRS84Quad/11/652/593.png?url={q(sat)}&expression={qe('(b3-b1)/(b3+b1+0.01)')}&resampling=bilinear&rescale=-1,1&colormap_name=viridis", None, "png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
