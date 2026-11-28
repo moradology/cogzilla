@@ -991,14 +991,14 @@ fn collection_search(
             // titiler-pgstac's converter reads CQL2 JSON too where it expects text, and
             // writes it back as it writes text.
             let given: Value = serde_json::from_str(v).map_err(|e| {
-                detail(StatusCode::UNPROCESSABLE_ENTITY, format!("invalid CQL2 JSON filter: {e}"))
+                invalid_param("query", "filter", format!("invalid CQL2 JSON filter: {e}"))
             })?;
             super::cql2_text::json_to_json(&given).map_err(|e| {
-                detail(StatusCode::UNPROCESSABLE_ENTITY, format!("invalid CQL2 JSON filter: {e}"))
+                invalid_param("query", "filter", format!("invalid CQL2 JSON filter: {e}"))
             })?
         } else {
             super::cql2_text::to_json(v).map_err(|e| {
-                detail(StatusCode::UNPROCESSABLE_ENTITY, format!("invalid CQL2 text filter: {e}"))
+                invalid_param("query", "filter", format!("invalid CQL2 text filter: {e}"))
             })?
         };
         search.insert("filter".into(), parsed);

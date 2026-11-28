@@ -5526,11 +5526,20 @@ where
 
     if let Err(msg) = validate_query(&segs, &pq) {
         if pgstac_item.is_none() {
+            let param = msg
+                .strip_prefix("invalid query parameter '")
+                .or_else(|| msg.strip_prefix("invalid parameter '"))
+                .and_then(|s| s.split('\'').next())
+                .or_else(|| msg.starts_with("algorithm '").then_some("algorithm"));
+            let loc = match param {
+                Some(name) => serde_json::json!(["query", name]),
+                None => serde_json::json!(["query"]),
+            };
             let body = serde_json::json!({
                 "detail": [
                     {
                         "type": "value_error",
-                        "loc": ["query"],
+                        "loc": loc,
                         "msg": msg,
                     }
                 ]
