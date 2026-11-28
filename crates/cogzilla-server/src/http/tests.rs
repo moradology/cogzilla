@@ -536,6 +536,9 @@ fn xyz_bounds_and_http_error_status_mapping() {
     assert!(validate_query(&["cog", "preview", "256x256.png"], &pq_wh).is_err());
     assert_eq!(resolve_query_dims(512, 256, Some(200), None), (200, 100));
     assert_eq!(resolve_query_dims(512, 256, None, Some(100)), (200, 100));
+    // Unrounded float aspect ratio avoids integer-rounding distortion on small native axes
+    // (204.8 / 16.64 * 32 = 393.85 -> 394, whereas rounded 205 / 17 * 32 = 385.88 -> 386).
+    assert_eq!(resolve_query_dims_f64(204.8, 16.64, None, Some(32)), (394, 32));
 
     let pq_ori = parse_query(Some("f=png&orientation=vertical"));
     assert!(validate_query(&["colorMaps", "viridis"], &pq_ori).is_ok());

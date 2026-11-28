@@ -61,7 +61,7 @@ pub use self::server::{serve, serve_listener, serve_listener_with_shutdown};
 pub(crate) use self::geo::{parse_coord_crs_with_epsg, tile_box_intersects_cog};
 use self::geo::{
     bbox_to_wgs84, cog_native_epsg_and_bounds, coord_to_lonlat, dataset_native_crs_and_bounds,
-    native_bbox_dims_in_crs, normalize_render_bbox, query_mosaicjson_wgs84_bbox,
+    native_bbox_dims_in_crs, native_bbox_dims_in_crs_f64, normalize_render_bbox, query_mosaicjson_wgs84_bbox,
     reproject_wgs84_bounds, tile_intersects_cog, wgs84_bboxes_intersect,
 };
 #[cfg(test)]
@@ -489,24 +489,33 @@ fn validate_query(segs: &[&str], pq: &ParsedQuery) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply optional `?width=` / `?height=` overrides onto aspect-preserving default dimensions.
-fn resolve_query_dims(default_w: u32, default_h: u32, q_w: Option<u32>, q_h: Option<u32>) -> (u32, u32) {
+/// Apply optional `?width=` / `?height=` overrides onto aspect-preserving float dimensions,
+/// preserving exact unrounded aspect ratio when only one axis is specified (matching `rio-tiler`).
+fn resolve_query_dims_f64(default_w: f64, default_h: f64, q_w: Option<u32>, q_h: Option<u32>) -> (u32, u32) {
     match (q_w, q_h) {
         (Some(w), Some(h)) => (w.clamp(1, 4096), h.clamp(1, 4096)),
         (Some(w), None) => {
             let w = w.clamp(1, 4096);
-            let h = ((w as f64 * (default_h as f64 / default_w.max(1) as f64)).round() as u32)
+            let h = ((w as f64 * (default_h / default_w.max(1e-9))).round() as u32)
                 .clamp(1, 4096);
             (w, h)
         }
         (None, Some(h)) => {
             let h = h.clamp(1, 4096);
-            let w = ((h as f64 * (default_w as f64 / default_h.max(1) as f64)).round() as u32)
+            let w = ((h as f64 * (default_w / default_h.max(1e-9))).round() as u32)
                 .clamp(1, 4096);
             (w, h)
         }
-        (None, None) => (default_w, default_h),
+        (None, None) => (
+            default_w.round().clamp(1.0, 4096.0) as u32,
+            default_h.round().clamp(1.0, 4096.0) as u32,
+        ),
     }
+}
+
+/// Apply optional `?width=` / `?height=` overrides onto aspect-preserving default dimensions.
+fn resolve_query_dims(default_w: u32, default_h: u32, q_w: Option<u32>, q_h: Option<u32>) -> (u32, u32) {
+    resolve_query_dims_f64(default_w as f64, default_h as f64, q_w, q_h)
 }
 
 /// Strip TileJSON/WMTS-only query parameters so they are not forwarded into tile URL templates.
@@ -1320,6 +1329,43 @@ fn capped_native_bbox_dims(
             .ceil()
             .clamp(1.0, cap as f64) as u32;
         (w, cap)
+    }
+}
+
+/// Resolve output `(width, height)` for a `/bbox`, `/feature`, or `/preview?dst_crs=` request:
+/// when a single axis (`width` or `height`) is given, derives the other from the unrounded float
+/// native aspect ratio (matching `rio-tiler::reader.part` / `output_size` without integer-rounding
+/// distortion); otherwise applies `capped_native_bbox_dims`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_bbox_query_dims(
+    engine: &TileEngine,
+    cog: &cogzilla_io::OpenedCog,
+    dst_crs: &cogzilla_proj::CrsModel,
+    wgs_bbox: [f64; 4],
+    dst_bbox: [f64; 4],
+    max_dim: u32,
+    q_w: Option<u32>,
+    q_h: Option<u32>,
+) -> (u32, u32) {
+    match (q_w, q_h) {
+        (Some(w), Some(h)) => (w.clamp(1, 4096), h.clamp(1, 4096)),
+        (None, None) => capped_native_bbox_dims(engine, cog, dst_crs, wgs_bbox, dst_bbox, max_dim),
+        (q_w, q_h) => {
+            if let Ok(crs) = engine.get_or_build_crs(cog) {
+                let (nat_w, nat_h) = native_bbox_dims_in_crs_f64(
+                    cog.index.full_res(),
+                    &crs,
+                    dst_crs,
+                    wgs_bbox,
+                    dst_bbox,
+                );
+                if nat_w.is_finite() && nat_h.is_finite() && nat_w > 0.0 && nat_h > 0.0 {
+                    return resolve_query_dims_f64(nat_w, nat_h, q_w, q_h);
+                }
+            }
+            let (def_w, def_h) = capped_native_bbox_dims(engine, cog, dst_crs, wgs_bbox, dst_bbox, max_dim);
+            resolve_query_dims(def_w, def_h, q_w, q_h)
+        }
     }
 }
 
@@ -4108,7 +4154,7 @@ async fn compute_mosaic_statistics_with_fold(
                 } else {
                     pq.max_size.clamp(1, 4096)
                 };
-                let (def_w, def_h) = if matches!(
+                let (w, h) = if matches!(
                     engine.get_or_build_crs(&cogs[0]),
                     Ok(cogzilla_proj::CrsModel::Geographic)
                 ) && full.pixel_to_crs.b.abs() < 1e-12
@@ -4116,29 +4162,30 @@ async fn compute_mosaic_statistics_with_fold(
                     && full.pixel_to_crs.a.abs() > 1e-12
                     && full.pixel_to_crs.e.abs() > 1e-12
                 {
-                    let nat_w = ((eff_bbox[2] - eff_bbox[0]).abs() / full.pixel_to_crs.a.abs())
-                        .round()
-                        .max(1.0) as u32;
-                    let nat_h = ((eff_bbox[3] - eff_bbox[1]).abs() / full.pixel_to_crs.e.abs())
-                        .round()
-                        .max(1.0) as u32;
-                    if nat_w.max(nat_h) <= cap {
-                        (nat_w, nat_h)
-                    } else if nat_w >= nat_h {
-                        let h = ((nat_h as f64 / nat_w as f64) * cap as f64)
-                            .ceil()
-                            .clamp(1.0, cap as f64) as u32;
-                        (cap, h)
+                    let nat_w_f = (eff_bbox[2] - eff_bbox[0]).abs() / full.pixel_to_crs.a.abs();
+                    let nat_h_f = (eff_bbox[3] - eff_bbox[1]).abs() / full.pixel_to_crs.e.abs();
+                    if pq.width.is_some() || pq.height.is_some() {
+                        resolve_query_dims_f64(nat_w_f, nat_h_f, pq.width, pq.height)
                     } else {
-                        let w = ((nat_w as f64 / nat_h as f64) * cap as f64)
-                            .ceil()
-                            .clamp(1.0, cap as f64) as u32;
-                        (w, cap)
+                        let nat_w = nat_w_f.round().max(1.0) as u32;
+                        let nat_h = nat_h_f.round().max(1.0) as u32;
+                        if nat_w.max(nat_h) <= cap {
+                            (nat_w, nat_h)
+                        } else if nat_w >= nat_h {
+                            let h = ((nat_h as f64 / nat_w as f64) * cap as f64)
+                                .ceil()
+                                .clamp(1.0, cap as f64) as u32;
+                            (cap, h)
+                        } else {
+                            let w = ((nat_w as f64 / nat_h as f64) * cap as f64)
+                                .ceil()
+                                .clamp(1.0, cap as f64) as u32;
+                            (w, cap)
+                        }
                     }
                 } else {
-                    capped_native_bbox_dims(engine, &cogs[0], &cogzilla_proj::CrsModel::Geographic, eff_bbox, eff_bbox, cap)
+                    resolve_bbox_query_dims(engine, &cogs[0], &cogzilla_proj::CrsModel::Geographic, eff_bbox, eff_bbox, cap, pq.width, pq.height)
                 };
-                let (w, h) = resolve_query_dims(def_w, def_h, pq.width, pq.height);
                 let dims = (w.clamp(1, 4096), h.clamp(1, 4096));
                 out_dims = Some(dims);
                 selected_bidx = if pq.bidx.is_empty() {

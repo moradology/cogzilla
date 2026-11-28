@@ -670,34 +670,15 @@ pub(super) fn tile_intersects_cog(
 }
 
 /// Project a WGS84 polygon bbox into an IFD's pixel space and return `(win_w, win_h, intersects)`.
-/// Compute the native pixel dimensions `(w, h)` for a WGS84 bounding box against `ifd`,
-/// matching GDAL `WarpedVRT` / `rio-tiler` suggested output sizing (preserving the target bbox
-/// aspect ratio without upsampling past native resolution).
-pub fn native_bbox_dims_in_crs(
+/// Compute the unrounded float native pixel dimensions `(w_f, h_f)` for a bounding box against
+/// `ifd`, preserving exact aspect ratio before any integer rounding or `max_size` capping.
+pub fn native_bbox_dims_in_crs_f64(
     ifd: &cogzilla_tiff::IfdMeta,
     src_crs: &cogzilla_proj::CrsModel,
     dst_crs: &cogzilla_proj::CrsModel,
     wgs_bbox: [f64; 4],
     dst_bbox: [f64; 4],
-) -> (u32, u32) {
-    // Scale `(w_f, h_f)` proportionally into `[1, 4096]` without squashing aspect ratio on
-    // large non-square rasters (e.g. a 21600x10800 global COG must stay 2:1, not 4096x4096).
-    let scale_dims_to_cap = |w_f: f64, h_f: f64| -> (u32, u32) {
-        let max_d = w_f.max(h_f);
-        if max_d > 4096.0 && max_d.is_finite() {
-            let s = 4096.0 / max_d;
-            (
-                (w_f * s).round().clamp(1.0, 4096.0) as u32,
-                (h_f * s).round().clamp(1.0, 4096.0) as u32,
-            )
-        } else {
-            (
-                w_f.round().clamp(1.0, 4096.0) as u32,
-                h_f.round().clamp(1.0, 4096.0) as u32,
-            )
-        }
-    };
-
+) -> (f64, f64) {
     let dx = if dst_bbox[2] < dst_bbox[0] && dst_bbox[0].abs() <= 180.0 && dst_bbox[2].abs() <= 180.0 {
         (dst_bbox[2] + 360.0) - dst_bbox[0]
     } else {
@@ -716,7 +697,7 @@ pub fn native_bbox_dims_in_crs(
             let w_res = ifd.pixel_to_crs.a.hypot(ifd.pixel_to_crs.d);
             let h_res = ifd.pixel_to_crs.b.hypot(ifd.pixel_to_crs.e);
             if w_res.is_finite() && h_res.is_finite() && w_res > 0.0 && h_res > 0.0 {
-                return scale_dims_to_cap(dx / w_res, dy / h_res);
+                return (dx / w_res, dy / h_res);
             }
         }
         let (lon0, mut lat0) = src_crs.to_lonlat_deg(sx0, sy0);
@@ -742,7 +723,7 @@ pub fn native_bbox_dims_in_crs(
                 let w_res = ifd.pixel_to_crs.a.hypot(ifd.pixel_to_crs.d);
                 let h_res = ifd.pixel_to_crs.b.hypot(ifd.pixel_to_crs.e);
                 if w_res.is_finite() && h_res.is_finite() && w_res > 0.0 && h_res > 0.0 {
-                    return scale_dims_to_cap(dx / w_res, dy / h_res);
+                    return (dx / w_res, dy / h_res);
                 }
             }
             let mut ddx = if src_crs.is_geographic() && dst_crs.is_web_mercator() {
@@ -764,7 +745,7 @@ pub fn native_bbox_dims_in_crs(
             let px_diag = (ifd.width as f64).hypot(eff_h);
             let res = ddx.hypot(ddy) / px_diag;
             if res.is_finite() && res > 0.0 {
-                return scale_dims_to_cap(dx / res, dy / res);
+                return (dx / res, dy / res);
             }
         }
     }
@@ -790,7 +771,7 @@ pub fn native_bbox_dims_in_crs(
     let mut rmin = f64::INFINITY;
     let mut rmax = f64::NEG_INFINITY;
     let Some(crs_to_px) = ifd.pixel_to_crs.invert() else {
-        return (1, 1);
+        return (1.0, 1.0);
     };
     let wrap_lo = src_crs.geographic_0_360_min_lon(&ifd.pixel_to_crs, ifd.width);
     for (mut lon, lat) in pts {
@@ -811,23 +792,46 @@ pub fn native_bbox_dims_in_crs(
         }
     }
     if !cmin.is_finite() || !rmin.is_finite() {
-        return (1, 1);
+        return (1.0, 1.0);
     }
     let nat_w = (cmax - cmin).abs();
     let nat_h = (rmax - rmin).abs();
     if dx <= 1e-12 || dy <= 1e-12 || nat_w <= 1e-6 || nat_h <= 1e-6 {
-        return (
-            nat_w.round().clamp(1.0, 4096.0) as u32,
-            nat_h.round().clamp(1.0, 4096.0) as u32,
-        );
+        return (nat_w.max(1.0), nat_h.max(1.0));
     }
     // Equal-pixel-density isotropic resolution in dst_crs fallback:
     let area_px = (nat_w * nat_h).max(1.0);
     let res = ((dx * dy) / area_px).sqrt();
     if !res.is_finite() || res <= 0.0 {
-        return scale_dims_to_cap(nat_w, nat_h);
+        return (nat_w, nat_h);
     }
-    scale_dims_to_cap(dx / res, dy / res)
+    (dx / res, dy / res)
+}
+
+/// Compute the native pixel dimensions `(w, h)` for a WGS84 bounding box against `ifd`,
+/// matching GDAL `WarpedVRT` / `rio-tiler` suggested output sizing (preserving the target bbox
+/// aspect ratio without upsampling past native resolution).
+pub fn native_bbox_dims_in_crs(
+    ifd: &cogzilla_tiff::IfdMeta,
+    src_crs: &cogzilla_proj::CrsModel,
+    dst_crs: &cogzilla_proj::CrsModel,
+    wgs_bbox: [f64; 4],
+    dst_bbox: [f64; 4],
+) -> (u32, u32) {
+    let (w_f, h_f) = native_bbox_dims_in_crs_f64(ifd, src_crs, dst_crs, wgs_bbox, dst_bbox);
+    let max_d = w_f.max(h_f);
+    if max_d > 4096.0 && max_d.is_finite() {
+        let s = 4096.0 / max_d;
+        (
+            (w_f * s).round().clamp(1.0, 4096.0) as u32,
+            (h_f * s).round().clamp(1.0, 4096.0) as u32,
+        )
+    } else {
+        (
+            w_f.round().clamp(1.0, 4096.0) as u32,
+            h_f.round().clamp(1.0, 4096.0) as u32,
+        )
+    }
 }
 
 
