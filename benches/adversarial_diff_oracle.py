@@ -1663,6 +1663,65 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(f32_58, 1)
     out["w58_neg_zero_f32"] = p_w58_neg0
 
+    # Wave 59: Cubic/Lanczos step-edge ringing clamping (uint8 0/255, int8 -127/127 w/ nodata=-128),
+    # single-row strips (ROWS_PER_STRIP=1) & prime strips (ROWS_PER_STRIP=13), and BigTIFF f64 P=3 w/ overviews
+    p_w59_u8 = synth_dir / "w59_step_u8.tif"
+    u8_59 = np.where(((xx9 // 16) + (yy9 // 16)) % 2 == 0, 0, 255).astype(np.uint8)
+    with rasterio.open(
+        p_w59_u8, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64, compress="deflate",
+    ) as ds:
+        ds.write(u8_59, 1)
+    out["w59_step_u8"] = p_w59_u8
+
+    p_w59_i8 = synth_dir / "w59_step_i8.tif"
+    i8_59 = np.where(((xx9 // 16) + (yy9 // 16)) % 2 == 0, -127, 127).astype(np.int8)
+    i8_59[80:100, 60:80] = -128
+    with rasterio.open(
+        p_w59_i8, "w", driver="GTiff", width=128, height=128, count=1, dtype="int8",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-128,
+    ) as ds:
+        ds.write(i8_59, 1)
+    out["w59_step_i8"] = p_w59_i8
+
+    p_w59_s1 = synth_dir / "w59_strip1_i16_p2.tif"
+    i16_59 = (-800 + xx9.astype(np.int32) * 20 + yy9.astype(np.int32) * 15).astype(np.int16)
+    i16_59[80:105, 60:90] = -32768
+    with rasterio.open(
+        p_w59_s1, "w", driver="GTiff", width=128, height=128, count=1, dtype="int16",
+        crs="EPSG:4326", transform=tf_w9, tiled=False, blockysize=1,
+        compress="deflate", predictor=2, nodata=-32768,
+    ) as ds:
+        ds.write(i16_59, 1)
+    out["w59_strip1_i16_p2"] = p_w59_s1
+
+    p_w59_s13 = synth_dir / "w59_strip13_f32_p3.tif"
+    f32_59 = (25.5 + xx9 * 1.4 + yy9 * 0.9).astype(np.float32)
+    f32_59[85:125, 60:95] = -9999.0  # crosses into final partial 11-row strip (rows 117..128)
+    with rasterio.open(
+        p_w59_s13, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=False, blockysize=13,
+        compress="zstd", predictor=3, nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_59, 1)
+    out["w59_strip13_f32_p3"] = p_w59_s13
+
+    p_w59_bt = synth_dir / "w59_bigtiff_f64_ovr.tif"
+    yy59b, xx59b = np.mgrid[0:256, 0:256]
+    f64_59 = (1_000_000_000.0 + xx59b.astype(np.float64) * 0.004 + yy59b.astype(np.float64) * 0.008)
+    f64_59[160:210, 120:170] = -9999.0
+    tf_w59_bt = from_bounds(-122.5, 37.5, -122.0, 38.0, 256, 256)
+    with rasterio.open(
+        p_w59_bt, "w", driver="GTiff", width=256, height=256, count=1, dtype="float64",
+        crs="EPSG:4326", transform=tf_w59_bt, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=3, nodata=-9999.0, BIGTIFF="YES",
+    ) as ds:
+        ds.write(f64_59, 1)
+        ds.build_overviews([2, 4], rasterio.enums.Resampling.average)
+    assert struct.unpack("<H", p_w59_bt.read_bytes()[2:4])[0] == 43, "w59_bigtiff_f64_ovr must be BigTIFF (version 43)"
+    out["w59_bigtiff_f64_ovr"] = p_w59_bt
+
     return out
 
 
@@ -5836,6 +5895,17 @@ def main() -> int:
                 ("PARITY W58 SPARSE nd=0 ?nodata=999 /statistics", "GET", f"/cog/statistics?url={q(s['w58_sparse_nd0'])}&nodata=999", None, "stats"),
                 ("PARITY W58 NEG-ZERO -0.0 vs nodata=0.0 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_neg_zero_f32'])}", None, "npy"),
                 ("PARITY W58 NEG-ZERO -0.0 vs nodata=0.0 /statistics", "GET", f"/cog/statistics?url={q(s['w58_neg_zero_f32'])}", None, "stats"),
+                # --- Wave 59: Lanczos/Cubic ringing clamping (u8/i8), single-row & prime strips, BigTIFF f64 P=3 w/ overviews ---
+                ("PARITY W59 RINGING uint8 step lanczos .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_step_u8'])}&resampling=lanczos", None, "npy"),
+                ("PARITY W59 RINGING uint8 step cubic .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w59_step_u8'])}&resampling=cubic", None, "png"),
+                ("PARITY W59 RINGING int8 step lanczos .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_step_i8'])}&resampling=lanczos", None, "npy"),
+                ("PARITY W59 RINGING int8 step cubic .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_step_i8'])}&resampling=cubic", None, "npy"),
+                ("PARITY W59 STRIP-1 i16 DEFLATE P2 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_strip1_i16_p2'])}", None, "npy"),
+                ("PARITY W59 STRIP-1 i16 DEFLATE P2 /statistics", "GET", f"/cog/statistics?url={q(s['w59_strip1_i16_p2'])}", None, "stats"),
+                ("PARITY W59 STRIP-13 f32 ZSTD P3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_strip13_f32_p3'])}", None, "npy"),
+                ("PARITY W59 STRIP-13 f32 ZSTD P3 /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w59_strip13_f32_p3'])}", None, "point"),
+                ("PARITY W59 BIGTIFF f64 P3 base z10 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w59_bigtiff_f64_ovr'])}", None, "npy_f64_exact"),
+                ("PARITY W59 BIGTIFF f64 P3 ovr z8 .npy", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.npy?url={q(s['w59_bigtiff_f64_ovr'])}", None, "npy_f64_exact"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
