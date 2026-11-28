@@ -7659,3 +7659,130 @@ async fn rgb_scalar_nodata_masks_only_when_all_bands_match_gdal_dataset_mask() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[tokio::test]
+async fn multiband_npy_preserves_file_nodata_on_partially_valid_pixels() {
+    let tmp = std::env::temp_dir().join(format!(
+        "cogzilla_multiband_nd_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // 16x16 3-band Float32 EPSG:4326 GeoTIFF with GDAL_NODATA = "-9999.0":
+    // - top half: b1=-9999.0, b2=-9999.0, b3=154.2 (partially valid -> mask valid, b1/b2 must stay -9999.0)
+    // - bottom half: b1=-9999.0, b2=-9999.0, b3=-9999.0 (all nodata -> masked)
+    let w = 16u32;
+    let h = 16u32;
+    let bounds = [5.0f64, 36.0, 12.0, 42.0];
+    let mut pixels = Vec::with_capacity((w * h * 3 * 4) as usize);
+    for y in 0..h {
+        for _x in 0..w {
+            let b3 = if y < 8 { 154.2f32 } else { -9999.0f32 };
+            for v in [-9999.0f32, -9999.0f32, b3] {
+                pixels.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+    let nd_bytes = b"-9999.0\0";
+    let mut buf = Vec::<u8>::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&42u16.to_le_bytes());
+    buf.extend_from_slice(&8u32.to_le_bytes());
+
+    let num_entries: u16 = 15;
+    let ifd_size = 2 + (num_entries as usize) * 12 + 4;
+    let data_start = 8 + ifd_size;
+    let bps_off = data_start as u32;
+    let sf_off = bps_off + 6;
+    let scale_off = sf_off + 6;
+    let tiepoint_off = scale_off + 24;
+    let geokey_off = tiepoint_off + 48;
+    let nd_off = geokey_off + 24;
+    let pixel_off = nd_off + nd_bytes.len() as u32;
+
+    let push_entry = |b: &mut Vec<u8>, tag: u16, ty: u16, count: u32, val: u32| {
+        b.extend_from_slice(&tag.to_le_bytes());
+        b.extend_from_slice(&ty.to_le_bytes());
+        b.extend_from_slice(&count.to_le_bytes());
+        b.extend_from_slice(&val.to_le_bytes());
+    };
+    buf.extend_from_slice(&num_entries.to_le_bytes());
+    push_entry(&mut buf, 256, 4, 1, w);
+    push_entry(&mut buf, 257, 4, 1, h);
+    push_entry(&mut buf, 258, 3, 3, bps_off);
+    push_entry(&mut buf, 259, 3, 1, 1);
+    push_entry(&mut buf, 262, 3, 1, 1);
+    push_entry(&mut buf, 273, 4, 1, pixel_off);
+    push_entry(&mut buf, 277, 3, 1, 3);
+    push_entry(&mut buf, 278, 4, 1, h);
+    push_entry(&mut buf, 279, 4, 1, pixels.len() as u32);
+    push_entry(&mut buf, 284, 3, 1, 1);
+    push_entry(&mut buf, 339, 3, 3, sf_off); // SampleFormat = [3, 3, 3] (IEEEFP)
+    push_entry(&mut buf, 33550, 12, 3, scale_off);
+    push_entry(&mut buf, 33922, 12, 6, tiepoint_off);
+    push_entry(&mut buf, 34735, 3, 12, geokey_off);
+    push_entry(&mut buf, 42113, 2, nd_bytes.len() as u32, nd_off);
+    buf.extend_from_slice(&0u32.to_le_bytes());
+
+    for _ in 0..3 {
+        buf.extend_from_slice(&32u16.to_le_bytes());
+    }
+    for _ in 0..3 {
+        buf.extend_from_slice(&3u16.to_le_bytes());
+    }
+    let sx = (bounds[2] - bounds[0]) / w as f64;
+    let sy = (bounds[3] - bounds[1]) / h as f64;
+    for v in [sx, sy, 0.0f64] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [0.0f64, 0.0, 0.0, bounds[0], bounds[3], 0.0] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [1u16, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    buf.extend_from_slice(nd_bytes);
+    buf.extend_from_slice(&pixels);
+    let path = tmp.join("asym_f32_nd9999.tif");
+    std::fs::write(&path, buf).unwrap();
+
+    let engine = Arc::new(TileEngine::new(64 * 1024 * 1024));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_listener(engine, listener).await;
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let r = client
+        .get(format!(
+            "{base}/cog/preview.npy?url={}&resampling=nearest",
+            path.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let npy = r.bytes().await.unwrap();
+    let (shape, start) = cogzilla_kernel::f32_npy_shape(&npy).expect("f32 npy");
+    assert_eq!(shape, vec![4, 16, 16]);
+    let vals: Vec<f32> = npy[start..]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let npix = 16 * 16;
+    // Top-half pixel (row 0, col 0): b1 == -9999.0 (NOT 0.0!), b2 == -9999.0, b3 == 154.2, mask == f32::MAX
+    assert_eq!(vals[0], -9999.0, "b1 must preserve file nodata -9999.0 on partially-valid pixel");
+    assert_eq!(vals[npix], -9999.0, "b2 must preserve file nodata -9999.0 on partially-valid pixel");
+    assert!((vals[2 * npix] - 154.2).abs() < 1e-4);
+    assert_eq!(vals[3 * npix], f32::MAX);
+    // Bottom-half pixel (row 15, col 0): mask == f32::MIN
+    assert_eq!(vals[3 * npix + 15 * 16], f32::MIN);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

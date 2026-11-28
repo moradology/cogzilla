@@ -349,16 +349,19 @@ pub(crate) fn geotiff_sample(kind: cogzilla_raster::SampleType) -> GeoTiffSample
 /// `GDAL_NODATA` of `nan` goes, as TiTiler writes none. Values are cast as
 /// `cogzilla_kernel::retype_f32_npy` casts them; with `mask`, the last band is the mask,
 /// written as the type's largest number where it is not zero and its smallest where it is.
+#[cfg(test)]
 pub(crate) fn retype_f32_geotiff(tif: &[u8], kind: cogzilla_raster::SampleType, mask: bool) -> Option<Bytes> {
-    retype_f32_geotiff_with(tif, kind, mask, |v| v)
+    retype_f32_geotiff_with(tif, kind, mask, None, |v| v)
 }
 
 /// [`retype_f32_geotiff`], each sample (not the mask) passed through `prepare` before it is
-/// cast, as `cogzilla_kernel::retype_f32_npy_with` does.
+/// cast, as `cogzilla_kernel::retype_f32_npy_with` does. `nodata_fill` is substituted for
+/// per-band `NaN`s on pixels whose dataset mask is valid (#636).
 pub(crate) fn retype_f32_geotiff_with(
     tif: &[u8],
     kind: cogzilla_raster::SampleType,
     mask: bool,
+    nodata_fill: Option<f64>,
     prepare: impl Fn(f64) -> f64,
 ) -> Option<Bytes> {
     let u16_at = |at: usize| tif.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
@@ -480,7 +483,7 @@ pub(crate) fn retype_f32_geotiff_with(
                     let v = read_sample(i);
                     let x: $t = if !is_mask(i) {
                         let mask_sample = (mask && v.is_nan()).then(|| read_sample(mask_index_of(i)));
-                        cast(prepare(cogzilla_kernel::retype_value_with_mask(v, mask_sample)))
+                        cast(prepare(cogzilla_kernel::retype_value_with_mask(v, mask_sample, nodata_fill)))
                     } else if cogzilla_kernel::is_valid_mask_sample(v) {
                         <$t>::MAX
                     } else {

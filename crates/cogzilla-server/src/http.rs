@@ -822,28 +822,30 @@ fn may_be_f32_array(data: &[u8]) -> bool {
 /// the type TiTiler writes it in ([`array_type`]); with `mask`, its last band is the mask.
 /// Left as it is without a type, or when it is not a float32 array of the bands it says.
 fn array_in_its_type(data: Bytes, kind: Option<cogzilla_raster::SampleType>, mask: bool) -> Bytes {
-    array_in_its_type_rounded(data, kind, mask, None)
+    array_in_its_type_rounded(data, kind, mask, None, None)
 }
 
 /// [`array_in_its_type`], each value first rounded by `rounding` and put in `kind` as
 /// numpy's `astype` puts it ([`array_type::astype`]): what `cast`, `ceil` and `floor` do.
+/// `nodata_fill` is substituted for per-band `NaN`s on partially-valid multi-band pixels (#636).
 fn array_in_its_type_rounded(
     data: Bytes,
     kind: Option<cogzilla_raster::SampleType>,
     mask: bool,
+    nodata_fill: Option<f64>,
     rounding: Option<fn(f64) -> f64>,
 ) -> Bytes {
     let Some(kind) = kind else { return data };
     let tif = data.starts_with(b"II*\0");
     let typed = match rounding {
-        None if tif => crate::geotiff::retype_f32_geotiff(&data, kind, mask),
-        None => cogzilla_kernel::retype_f32_npy(&data, kind, mask),
+        None if tif => crate::geotiff::retype_f32_geotiff_with(&data, kind, mask, nodata_fill, |v| v),
+        None => cogzilla_kernel::retype_f32_npy_with(&data, kind, mask, nodata_fill, |v| v),
         Some(round) => {
             let prepare = |v: f64| array_type::astype(kind, round(v));
             if tif {
-                crate::geotiff::retype_f32_geotiff_with(&data, kind, mask, prepare)
+                crate::geotiff::retype_f32_geotiff_with(&data, kind, mask, nodata_fill, prepare)
             } else {
-                cogzilla_kernel::retype_f32_npy_with(&data, kind, mask, prepare)
+                cogzilla_kernel::retype_f32_npy_with(&data, kind, mask, nodata_fill, prepare)
             }
         }
     };
@@ -854,9 +856,17 @@ fn array_in_its_type_rounded(
 #[derive(Clone)]
 enum ArrayAsked {
     /// The values in their type: the rule, the assets asked for (none on `/cog`), the band
-    /// math, whether a mask was asked for, and the assets' own band math and the request
-    /// expression over it, typed one after the other (`ParsedQuery::asset_math_stages`).
-    Typed(array_type::ArrayRule, Vec<String>, Option<String>, bool, Option<(Vec<Option<String>>, String)>),
+    /// math, whether a mask was asked for, the assets' own band math and the request
+    /// expression over it (`ParsedQuery::asset_math_stages`), and any explicit `?nodata=`
+    /// override.
+    Typed(
+        array_type::ArrayRule,
+        Vec<String>,
+        Option<String>,
+        bool,
+        Option<(Vec<Option<String>>, String)>,
+        Option<f64>,
+    ),
     /// The picture's bytes, for a `.npy` asked with a rescale, a colour map or a colour
     /// formula: the request, which says how they are painted.
     Shown(Box<ParsedQuery>),
@@ -895,7 +905,14 @@ fn array_asked(pq: &ParsedQuery, last: Option<&&str>) -> Option<ArrayAsked> {
         None => pq,
     };
     if let Some(rule) = array_type::ArrayRule::of(pq) {
-        return Some(ArrayAsked::Typed(rule, pq.assets.clone(), pq.expr_raw.clone(), pq.return_mask, pq.asset_math_stages.clone()));
+        return Some(ArrayAsked::Typed(
+            rule,
+            pq.assets.clone(),
+            pq.expr_raw.clone(),
+            pq.return_mask,
+            pq.asset_math_stages.clone(),
+            pq.nodata.map(f64::from),
+        ));
     }
     let npy = last.is_some_and(|last| last.ends_with(".npy")) || pq.format_param.as_deref() == Some("npy");
     let shown = npy && array_type::shown(pq);
@@ -1011,7 +1028,7 @@ fn apply_array_asked(
         return data;
     }
     match asked {
-        ArrayAsked::Typed(rule, _, expression, mask, stages) => {
+        ArrayAsked::Typed(rule, _, expression, mask, stages, query_nodata) => {
             let reads: Vec<_> = cogs.iter().map(|cog| cog.index.full_res().sample_type).collect();
             let kind = match &stages {
                 Some((own, request)) if own.len() == reads.len() => {
@@ -1020,7 +1037,14 @@ fn apply_array_asked(
                 _ => rule.kind(&reads, expression_override.or(expression.as_deref())),
             };
             let rounding = kind.and_then(|kind| rule.rounding(kind));
-            array_in_its_type_rounded(data, kind, mask, rounding)
+            let nodata_fill = if matches!(rule, array_type::ArrayRule::Data { .. })
+                && expression_override.or(expression.as_deref()).is_none()
+            {
+                query_nodata.or_else(|| cogs[0].index.nodata.map(f64::from))
+            } else {
+                None
+            };
+            array_in_its_type_rounded(data, kind, mask, nodata_fill, rounding)
         }
         ArrayAsked::Shown(pq) => {
             shown_array(&pq, cogs.first().map(|cog| &**cog), &data).unwrap_or(data)
@@ -1059,7 +1083,7 @@ async fn stac_array_in_its_type(
         return data;
     };
     let (assets, expression) = match &asked {
-        ArrayAsked::Typed(_, assets, expression, _, _) => (assets.clone(), expression.clone()),
+        ArrayAsked::Typed(_, assets, expression, _, _, _) => (assets.clone(), expression.clone()),
         ArrayAsked::Shown(pq) => (pq.assets.clone(), pq.expr_raw.clone()),
     };
     let Ok((names, cogs, expression)) =
@@ -1070,7 +1094,7 @@ async fn stac_array_in_its_type(
     let asked = match asked {
         // The assets read are not the entries asked (`:all:`): each read asset's band math is
         // found by its name and how many times it came before, as the stack finds it.
-        ArrayAsked::Typed(rule, entries, expr, mask, Some((own, request))) if entries != names => {
+        ArrayAsked::Typed(rule, entries, expr, mask, Some((own, request)), query_nodata) if entries != names => {
             let of_name = |name: &String| -> Vec<&String> {
                 entries.iter().zip(&own).filter(|(n, _)| *n == name).filter_map(|(_, e)| e.as_ref()).collect()
             };
@@ -1082,7 +1106,7 @@ async fn stac_array_in_its_type(
                     exprs.get(nth).or(exprs.last()).map(|e| (*e).clone())
                 })
                 .collect();
-            ArrayAsked::Typed(rule, entries, expr, mask, Some((own, request)))
+            ArrayAsked::Typed(rule, entries, expr, mask, Some((own, request)), query_nodata)
         }
         asked => asked,
     };
@@ -1102,7 +1126,7 @@ async fn mosaic_array_in_its_type(
     let Some(asked) = asked.filter(|_| may_be_f32_array(&data)) else {
         return data;
     };
-    if let ArrayAsked::Typed(_, _, _, mask, _) = &asked {
+    if let ArrayAsked::Typed(_, _, _, mask, _, _) = &asked {
         match selection {
             pixel_selection::Selection::Stdev => {
                 return array_in_its_type(data, Some(cogzilla_raster::SampleType::Float32), *mask);
