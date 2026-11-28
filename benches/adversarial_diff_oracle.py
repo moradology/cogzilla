@@ -2548,6 +2548,85 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
     out["w85_be_planar_striped7_pb"] = p_w85_be_pb
 
+    # Wave 87: #673 return_mask=false preserving non-zero collar RGB behind alpha=0 / mask=0
+    #          + deep embedded palette (ColorMap tag 320) interactions
+    rgba8_collar = rgba8_w80.copy()
+    rgba8_collar[0, 75:95, 60:80] = 200
+    rgba8_collar[1, 75:95, 60:80] = 100
+    rgba8_collar[2, 75:95, 60:80] = 50
+    rgba8_collar[3, 75:95, 60:80] = 0
+
+    p_w87_rgba_c = synth_dir / "w87_rgba_collar_u8.tif"
+    with rasterio.open(
+        p_w87_rgba_c, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_collar)
+    with rasterio.open(p_w87_rgba_c) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha
+    out["w87_rgba_collar_u8"] = p_w87_rgba_c
+
+    p_w87_planar_c = synth_dir / "w87_planar_rgba_collar_u8.tif"
+    with rasterio.open(
+        p_w87_planar_c, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_collar)
+    with rasterio.open(p_w87_planar_c) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha
+    out["w87_planar_rgba_collar_u8"] = p_w87_planar_c
+
+    p_w87_imask_c = synth_dir / "w87_imask_collar_rgb.tif"
+    imask_rgb = rgba8_collar[:3].copy()
+    imask_rgb[0, 75:95, 60:80] = 210
+    imask_rgb[1, 75:95, 60:80] = 90
+    imask_rgb[2, 75:95, 60:80] = 40
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(
+            p_w87_imask_c, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint8",
+            crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+            compress="deflate", photometric="RGB",
+        ) as ds:
+            ds.write(imask_rgb)
+            ds.write_mask(alpha79)
+    out["w87_imask_collar_rgb"] = p_w87_imask_c
+
+    p_w87_pal = synth_dir / "w87_palette_u8.tif"
+    pal_w87 = (1 + ((xx9 // 16 + yy9 // 16) % 7)).astype(np.uint8)
+    pal_w87[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w87_pal, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(pal_w87, 1)
+        ds.write_colormap(1, {
+            0: (0, 0, 0, 0),
+            1: (220, 40, 40, 255),
+            2: (40, 180, 60, 255),
+            3: (40, 90, 220, 255),
+            4: (230, 200, 40, 255),
+            5: (180, 50, 200, 255),
+            6: (40, 200, 200, 255),
+            7: (240, 130, 40, 255),
+        })
+    out["w87_palette_u8"] = p_w87_pal
+
     return out
 
 
@@ -7726,6 +7805,23 @@ def main() -> int:
                 ("PARITY W85 BE-MM PLANAR-STRIPED-7 PACKBITS tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w85_be_planar_striped7_pb'])}", None, "npy"),
                 ("PARITY W85 BE-MM PLANAR-STRIPED-7 PACKBITS /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w85_be_planar_striped7_pb'])}", None, "npy"),
                 ("PARITY W85 BE-MM PLANAR-STRIPED-7 PACKBITS GET /stats", "GET", f"/cog/statistics?url={q(s['w85_be_planar_striped7_pb'])}", None, "stats"),
+                # --- Wave 87: #673 return_mask=false raw RGB collar preservation + embedded palette deep interactions ---
+                ("BETTER W87 #673 RGBA collar return_mask=false tile .png (cw raw RGB, tt VRT 0)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w87_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", None, "better_w87_collar_tile_png"),
+                ("PARITY W87 #673 RGBA collar return_mask=false /bbox .png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w87_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", None, "png"),
+                ("PARITY W87 #673 RGBA collar return_mask=false /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w87_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", None, "npy"),
+                ("PARITY W87 #673 RGBA collar return_mask=false /bbox .tif", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.tif?url={q(s['w87_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", None, "geotiff"),
+                ("PARITY W87 #673 RGBA collar return_mask=false POST /feature .png", "POST", f"/cog/feature/64x64.png?url={q(s['w87_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "png"),
+                ("PARITY W87 #673 RGBA collar return_mask=false /preview .png", "GET", f"/cog/preview.png?url={q(s['w87_rgba_collar_u8'])}&max_size=64&bidx=1&bidx=2&bidx=3&return_mask=false", None, "png"),
+                ("BETTER W87 #673 PLANAR-RGBA collar return_mask=false tile .png (cw raw RGB, tt VRT 0)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w87_planar_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", None, "better_w87_collar_tile_png"),
+                ("PARITY W87 #673 PLANAR-RGBA collar return_mask=false /bbox .png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w87_planar_rgba_collar_u8'])}&bidx=1&bidx=2&bidx=3&return_mask=false", None, "png"),
+                ("BETTER W87 #673 IMASK collar return_mask=false tile .png (cw raw RGB, tt VRT 0)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w87_imask_collar_rgb'])}&return_mask=false", None, "better_w87_collar_tile_png"),
+                ("PARITY W87 #673 IMASK collar return_mask=false /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w87_imask_collar_rgb'])}&return_mask=false", None, "npy"),
+                ("PARITY W87 #673 IMASK collar return_mask=false /bbox .png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w87_imask_collar_rgb'])}&return_mask=false", None, "png"),
+                ("PARITY W87 PALETTE-U8 default tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w87_palette_u8'])}", None, "png"),
+                ("PARITY W87 PALETTE-U8 colormap_name=viridis override .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w87_palette_u8'])}&rescale=1,7&colormap_name=viridis", None, "png"),
+                ("PARITY W87 PALETTE-U8 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w87_palette_u8'])}", None, "png"),
+                ("PARITY W87 PALETTE-U8 /preview 64 .png", "GET", f"/cog/preview.png?url={q(s['w87_palette_u8'])}&max_size=64", None, "png"),
+                ("PARITY W87 PALETTE-U8 GET /statistics categorical=true", "GET", f"/cog/statistics?url={q(s['w87_palette_u8'])}&categorical=true", None, "stats_w23"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7748,8 +7844,8 @@ def main() -> int:
                 ("BETTER palette .npy raw indices (cw 2ch, tt 4ch)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.npy?url={q(palette)}", None, "better_palette_npy"),
                 ("STRICT 2-band Float32 .png (cw 400, tt 200)", "GET", f"/cog/tiles/WebMercatorQuad/12/652/1583.png?url={q(sat)}&bidx=1&bidx=2&rescale=0,0.35", None, "better_cw400_tt200"),
                 ("STRICT 2-band Uint16 .png (cw 400)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(rgbn_u16)}&bidx=1&bidx=2", None, "better_cw400"),
-                ("mask_1bit return_mask=false", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_1bit)}&return_mask=false", None, "img"),
-                ("mask_rgba return_mask=false", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_rgba)}&return_mask=false", None, "img"),
+                ("mask_1bit return_mask=false", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_1bit)}&return_mask=false", None, "png"),
+                ("mask_rgba return_mask=false", "GET", f"/cog/tiles/WebMercatorQuad/10/164/395.png?url={q(mask_rgba)}&return_mask=false", None, "png"),
                 ("BETTER slope seamless 256x256 (cw 256, tt 250)", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.npy?url={q(merc)}&algorithm=slope", None, "better_slope_256"),
                 ("BETTER cast dtype=int16 (cw int16, tt hardcoded u8)", "GET", f"/cog/tiles/WebMercatorQuad/11/327/792.npy?url={q(s['neg_f32'])}&algorithm=cast&algorithm_params={qe(json.dumps({'dtype':'int16'}))}", None, "better_cast_i16"),
             ]
@@ -8525,6 +8621,17 @@ def main() -> int:
                             hc, ht = jc["b1"]["histogram"], jt["b1"]["histogram"]
                             ok = len(hc[0]) == 5 and len(ht[0]) == 5 and max(abs(a - b) for a, b in zip(hc[1], ht[1])) < 1e-4
                             detail += f" bins={len(hc[0])} edges=[{hc[1][0]}..{hc[1][-1]}]"
+                    elif kind == "better_w87_collar_tile_png":
+                        imc = Image.open(io.BytesIO(r_cw.content))
+                        imt = Image.open(io.BytesIO(r_tt.content))
+                        ac, at = np.array(imc.convert("RGB")), np.array(imt.convert("RGB"))
+                        non_hole = at.any(axis=2)
+                        hole = ~non_hole
+                        mae_valid = float(np.abs(ac[non_hole].astype(float) - at[non_hole].astype(float)).mean()) if non_hole.any() else 999.0
+                        exp_rgb = [210, 90, 40] if "IMASK" in label else [200, 100, 50]
+                        hole_match = bool(hole.any()) and int(hole.sum()) > 5000 and bool((ac[hole] == exp_rgb).all())
+                        ok = imc.mode == "RGB" and imt.mode == "RGB" and mae_valid < 0.01 and hole_match
+                        detail = f"mode={imc.mode} valid_MAE={mae_valid:.2f} hole_px={int(hole.sum())} cw_hole={ac[hole][0].tolist() if hole.any() else None} tt_hole=[0,0,0]"
                     elif kind == "better_w83_cubic_spline_bbox_hole":
                         ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
                         at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
