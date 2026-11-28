@@ -82,14 +82,14 @@ def render_titiler_scaling() -> None:
     )
     fig.text(
         0.5, 0.942,
-        "Same 2048×2048 3-band F32 COG, 726-tile Web Mercator pool, encoded-tile cache OFF, 3-run medians (commit 3787b88)",
+        "Same 2048×2048 3-band F32 COG, 726-tile Web Mercator pool, encoded-tile cache OFF, 3-run medians (3960X: 3787b88, M5: f0aa40e)",
         ha="center", fontsize=9.8, color=MUTED,
     )
 
     # Shared legend cleanly placed above the 2x2 grid
     handles = [
         Line2D([0], [0], color=C_BLUE,  marker="o", lw=2.5, ms=6.5, label="cogzilla — Threadripper 3960X 24C/48T (185–428 MiB RSS)"),
-        Line2D([0], [0], color=C_GREEN, marker="s", lw=2.5, ms=6.5, label="cogzilla — Apple M5 10C (168–357 MiB RSS)"),
+        Line2D([0], [0], color=C_GREEN, marker="s", lw=2.5, ms=6.5, label="cogzilla — Apple M5 10C (206–343 MiB RSS)"),
         Line2D([0], [0], color=C_AMBER, marker="^", lw=2.2, ms=6.5, ls="--", label="TiTiler 2.4 — Threadripper 3960X 1–48w (154–7,021 MiB RSS)"),
         Line2D([0], [0], color=C_RED,   marker="D", lw=2.2, ms=6.0, ls="--", label="TiTiler 2.4 — Apple M5 1–10w (174–1,543 MiB RSS)"),
     ]
@@ -108,8 +108,8 @@ def render_titiler_scaling() -> None:
     tt_tr_p50 = np.array([19.31, 27.23, 17.77, 26.80, 36.29, 40.35, 36.18])
 
     w_m5 = np.array([1, 2, 4, 8, 10])
-    cz_m5_rps = np.array([1563.0, 2999.7, 4080.3, 5450.3, 7298.0])
-    cz_m5_p50 = np.array([0.56,   0.59,   0.89,   1.22,   1.20])
+    cz_m5_rps = np.array([1610.0, 1818.5, 4671.9, 7514.8, 8427.3])
+    cz_m5_p50 = np.array([0.55,   1.06,   0.81,   0.98,   1.07])
     tt_m5_rps = np.array([118.8,  236.4,  245.5,  373.0,  418.6])
     tt_m5_p50 = np.array([7.69,   18.98,  29.23,  34.85,  50.44])
 
@@ -129,7 +129,7 @@ def render_titiler_scaling() -> None:
     ax1.set_title("A. 256×256 RGB Bilinear PNG — Throughput")
     style_ax(ax1, "both")
     ax1.text(48 * 1.08, 7622, "7,622 r/s\n(8.0×)", color=C_BLUE,  fontsize=8.3, fontweight="bold", va="center")
-    ax1.text(10 * 1.12, 7298, "7,298 r/s (17.4×)",  color=C_GREEN, fontsize=8.3, fontweight="bold", va="bottom")
+    ax1.text(10 * 1.12, 8427, "8,427 r/s (20.1×)",  color=C_GREEN, fontsize=8.3, fontweight="bold", va="bottom")
     ax1.text(48 * 1.08, 952,  "952 r/s",            color=C_AMBER, fontsize=8.2, va="center")
     ax1.text(10 * 1.12, 419,  "419 r/s",            color=C_RED,   fontsize=8.2, va="center")
 
@@ -151,19 +151,19 @@ def render_titiler_scaling() -> None:
     ax2.text(10 * 1.12, 50.4, "50.4 ms",            color=C_RED,   fontsize=8.2, va="center")
     ax2.text(48 * 1.08, 36.2, "36.2 ms",            color=C_AMBER, fontsize=8.2, va="center")
     ax2.text(48 * 1.08, 5.31, "5.3 ms\n(6.8×)",     color=C_BLUE,  fontsize=8.3, fontweight="bold", va="center")
-    ax2.text(10 * 1.12, 1.20, "1.2 ms (42× lower)", color=C_GREEN, fontsize=8.3, fontweight="bold", va="center")
+    ax2.text(10 * 1.12, 1.07, "1.1 ms (47× lower)", color=C_GREEN, fontsize=8.3, fontweight="bold", va="center")
 
     # --- Bottom row: 512x512 RGB Lanczos3 JPEG (c = 1, 4, 16, 32 — single harness, zero mixing) ---
     c4 = np.array([1, 4, 16, 32])
     tr_512_rps = np.array([349, 1381, 5299, 7908])
-    m5_512_rps = np.array([675, 2063, 3321, 3288])
+    m5_512_rps = np.array([1146, 3387, 5432, 5502])
     tt_tr_512_rps = np.array([12.9, 44.8, 155.6, 239.9])
     tt_m5_512_rps = np.array([26.2, 72.7, 99.5,  103.8])
 
     tr_512_p50 = np.array([2.6, 2.6, 2.7, 4.2])
     tr_512_p99 = np.array([8.1, 8.2, 8.7, 12.8])
-    m5_512_p50 = np.array([1.3, 1.8, 3.1, 3.1])
-    m5_512_p99 = np.array([3.9, 5.1, 19.7, 56.5])
+    m5_512_p50 = np.array([0.7, 1.0, 2.4, 5.4])
+    m5_512_p99 = np.array([3.1, 4.2, 12.2, 15.1])
     tt_tr_512_p50 = np.array([89.0, 91.6, 101.1, 129.6])
     tt_tr_512_p99 = np.array([126.3, 121.8, 137.1, 194.3])
     tt_m5_512_p50 = np.array([42.1, 59.0, 158.2, 309.7])
@@ -184,8 +184,8 @@ def render_titiler_scaling() -> None:
     ax3.set_ylabel("Throughput (req/s, higher is better)")
     ax3.set_title("C. 512×512 RGB Lanczos3 JPEG — Throughput")
     style_ax(ax3, "both")
-    ax3.text(32 * 1.08, 7908, "7,908 r/s\n(33×)", color=C_BLUE,  fontsize=8.3, fontweight="bold", va="center")
-    ax3.text(32 * 1.08, 3288, "3,288 r/s\n(32×)", color=C_GREEN, fontsize=8.3, fontweight="bold", va="center")
+    ax3.text(32 * 1.08, 7908, "7,908 r/s\n(33×)", color=C_BLUE,  fontsize=8.3, fontweight="bold", va="bottom")
+    ax3.text(32 * 1.08, 5502, "5,502 r/s\n(53×)", color=C_GREEN, fontsize=8.3, fontweight="bold", va="top")
     ax3.text(32 * 1.08, 240,  "240 r/s",          color=C_AMBER, fontsize=8.2, va="center")
     ax3.text(32 * 1.08, 104,  "104 r/s",          color=C_RED,   fontsize=8.2, va="center")
 
@@ -202,16 +202,16 @@ def render_titiler_scaling() -> None:
     ax4.set_yscale("log")
     ax4.set_xticks([1, 4, 16, 32])
     ax4.get_xaxis().set_major_formatter(ticker.ScalarFormatter())
-    ax4.set_xlim(0.85, 58)
-    ax4.set_ylim(0.8, 700)
+    ax4.set_xlim(0.85, 76)
+    ax4.set_ylim(0.5, 700)
     ax4.set_xlabel("Concurrent Clients (1 = single core)")
     ax4.set_ylabel("Latency (ms, lower is better)")
     ax4.set_title("D. 512×512 RGB Lanczos3 JPEG — Latency (p50 Line, p99 Shaded)")
     style_ax(ax4, "both")
-    ax4.text(32 * 1.08, 310, "310 ms",         color=C_RED,   fontsize=8.2, va="center")
-    ax4.text(32 * 1.08, 130, "130 ms",         color=C_AMBER, fontsize=8.2, va="center")
-    ax4.text(32 * 1.08, 4.7, "4.2 ms",         color=C_BLUE,  fontsize=8.3, fontweight="bold", va="bottom")
-    ax4.text(32 * 1.08, 2.7, "3.1 ms (100×)",  color=C_GREEN, fontsize=8.3, fontweight="bold", va="top")
+    ax4.text(32 * 1.08, 310, "310 ms",            color=C_RED,   fontsize=8.2, va="center")
+    ax4.text(32 * 1.08, 130, "130 ms",            color=C_AMBER, fontsize=8.2, va="center")
+    ax4.text(32 * 1.08, 6.2, "5.4 ms\n(p99 15ms)", color=C_GREEN, fontsize=8.1, fontweight="bold", va="bottom")
+    ax4.text(32 * 1.08, 3.6, "4.2 ms\n(p99 13ms)", color=C_BLUE,  fontsize=8.1, fontweight="bold", va="top")
 
     fig.text(
         0.5, 0.012,
