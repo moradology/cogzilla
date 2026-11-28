@@ -2304,6 +2304,59 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
     out["w81_semitrans_rgba_u16"] = p_w81_rgba16
 
+    # Wave 82: Exact float64 (> 1e9, beyond f32 24-bit mantissa) across STAC 2-asset, multi-URL, and MosaicJSON (#657)
+    p_w82_f64_a = synth_dir / "w82_f64_a.tif"
+    p_w82_f64_b = synth_dir / "w82_f64_b.tif"
+    f64_a = (1_000_000_000.125 + xx9.astype(np.float64) * 0.001).astype(np.float64)
+    f64_a[75:95, 60:80] = -9999.0
+    f64_b = (1_000_000_000.375 + yy9.astype(np.float64) * 0.001).astype(np.float64)
+    f64_b[85:105, 70:90] = -9999.0
+    for pp, arr in ((p_w82_f64_a, f64_a), (p_w82_f64_b, f64_b)):
+        with rasterio.open(
+            pp, "w", driver="GTiff", width=128, height=128, count=1, dtype="float64",
+            crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+            compress="deflate", nodata=-9999.0,
+        ) as ds:
+            ds.write(arr, 1)
+    out["w82_f64_a"] = p_w82_f64_a
+    out["w82_f64_b"] = p_w82_f64_b
+
+    p_w82_stac = synth_dir / "w82_stac_f64.json"
+    p_w82_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w82-f64-pair",
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "assets": {
+            "a": {"href": str(p_w82_f64_a), "type": "image/tiff; application=geotiff"},
+            "b": {"href": str(p_w82_f64_b), "type": "image/tiff; application=geotiff"},
+        },
+        "links": [],
+    }))
+    out["w82_stac_f64"] = p_w82_stac
+
+    # Quadkey for tile 10/164/396 (and parent z8)
+    def _qk(x: int, y: int, z: int) -> str:
+        bits = []
+        for i in range(z, 0, -1):
+            m = 1 << (i - 1)
+            d = (1 if (x & m) else 0) + (2 if (y & m) else 0)
+            bits.append(str(d))
+        return "".join(bits)
+
+    p_w82_mosaic = synth_dir / "w82_mosaic_f64.json"
+    p_w82_mosaic.write_text(json.dumps({
+        "mosaicjson": "0.0.3",
+        "minzoom": 8,
+        "maxzoom": 14,
+        "quadkey_zoom": 8,
+        "bounds": [-122.6, 37.4, -121.9, 38.1],
+        "tiles": {_qk(164 >> 2, 396 >> 2, 8): [str(p_w82_f64_a), str(p_w82_f64_b)]},
+    }))
+    out["w82_mosaic_f64"] = p_w82_mosaic
+
     return out
 
 
@@ -4994,6 +5047,108 @@ def run_wave29_http_protocol_checks(
         ok = ro.status_code == 204 and acao == "*" and "GET" in acam and "POST" in acam
         rec(lb, ok, f"st={ro.status_code} acao={acao!r} acam={acam!r}", tile_p, "OPTIONS")
 
+    # Wave 82: #663 standardized 422 HTTPValidationError schema + #657 multi-URL & MosaicJSON exact f64 > 1e9
+    lb = "W82 #663 HTTP 422 nested HTTPValidationError schema"
+    if wanted(lb):
+        probes = [
+            (f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w29_lzw_p2_u16'])}&tilesize=4096", "tilesize"),
+            (f"/cog/preview.png?url={q(s['w29_lzw_p2_u16'])}&max_size=-1", "max_size"),
+            (f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w29_lzw_p2_u16'])}&resampling=bogus", "resampling"),
+        ]
+        all_ok, notes = True, []
+        for pp, param in probes:
+            rr = client.get(cw_base + pp)
+            jj = rr.json() if rr.headers.get("content-type", "").startswith("application/json") else {}
+            det = jj.get("detail")
+            p_ok = (
+                rr.status_code == 422
+                and isinstance(det, list)
+                and len(det) >= 1
+                and isinstance(det[0], dict)
+                and "type" in det[0]
+                and "msg" in det[0]
+                and isinstance(det[0].get("loc"), list)
+                and len(det[0]["loc"]) >= 1
+                and det[0]["loc"][0] == "query"
+            )
+            all_ok = all_ok and p_ok
+            notes.append(f"{param}={rr.status_code}:loc={det[0].get('loc') if isinstance(det, list) and det else None}")
+        rec(lb, all_ok, " ".join(notes), probes[0][0])
+
+    lb = "W82 #657 MULTI-URL f64 >1e9 tile .npy"
+    if wanted(lb):
+        p = f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w82_f64_a'])}&url={q(s['w82_f64_b'])}"
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            arr = np.load(io.BytesIO(r.content))
+            low = np.finfo(np.float64).min
+            m = arr[2] > low
+            # Band 0 has .125 + xx*0.001, Band 1 has .375 + yy*0.001 (f32 would round both to 1e9.0!)
+            frac0 = arr[0][m & np.isfinite(arr[0])] - 1_000_000_000.0
+            frac1 = arr[1][m & np.isfinite(arr[1])] - 1_000_000_000.0
+            ok = (
+                arr.dtype == np.float64
+                and arr.shape == (3, 256, 256)
+                and 0.16 < float(frac0.min()) < float(frac0.max()) < 0.25
+                and 0.43 < float(frac1.min()) < float(frac1.max()) < 0.51
+            )
+            rec(lb, ok, f"dtype={arr.dtype} shape={arr.shape} b0_frac=[{frac0.min():.4f}..{frac0.max():.4f}] b1_frac=[{frac1.min():.4f}..{frac1.max():.4f}]", p)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
+
+    lb = "W82 #657 MULTI-URL f64 >1e9 tile .tif"
+    if wanted(lb):
+        p = f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w82_f64_a'])}&url={q(s['w82_f64_b'])}"
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            with rasterio.MemoryFile(r.content) as mf, mf.open() as ds:
+                arr = ds.read()
+            m = arr[2] > 0
+            frac0 = arr[0][m & np.isfinite(arr[0]) & (arr[0] > 1e8)] - 1_000_000_000.0
+            frac1 = arr[1][m & np.isfinite(arr[1]) & (arr[1] > 1e8)] - 1_000_000_000.0
+            ok = (
+                arr.dtype == np.float64
+                and arr.shape == (3, 256, 256)
+                and 0.16 < float(frac0.min()) < float(frac0.max()) < 0.25
+                and 0.43 < float(frac1.min()) < float(frac1.max()) < 0.51
+            )
+            rec(lb, ok, f"dtype={arr.dtype} shape={arr.shape} b0_frac=[{frac0.min():.4f}..{frac0.max():.4f}] b1_frac=[{frac1.min():.4f}..{frac1.max():.4f}]", p)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
+
+    lb = "W82 #657 MOSAIC f64 >1e9 tile .npy (pixel_selection=first)"
+    if wanted(lb):
+        p = f"/mosaicjson/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w82_mosaic_f64'])}&pixel_selection=first"
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            arr = np.load(io.BytesIO(r.content))
+            low = np.finfo(np.float64).min
+            m = arr[1] > low
+            frac = arr[0][m] - 1_000_000_000.0
+            # Outside A's hole we get A (.16..0.24); inside A's hole (where B is valid) we get B (.44..0.47)!
+            has_a = int(((frac > 0.15) & (frac < 0.26)).sum())
+            has_b = int(((frac > 0.42) & (frac < 0.51)).sum())
+            ok = arr.dtype == np.float64 and arr.shape == (2, 256, 256) and has_a > 50000 and has_b > 2000
+            rec(lb, ok, f"dtype={arr.dtype} a_px={has_a} b_fill_px={has_b} frac=[{frac.min():.4f}..{frac.max():.4f}]", p)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
+
+    lb = "W82 #657 MOSAIC f64 >1e9 tile .tif (pixel_selection=first)"
+    if wanted(lb):
+        p = f"/mosaicjson/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w82_mosaic_f64'])}&pixel_selection=first"
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            with rasterio.MemoryFile(r.content) as mf, mf.open() as ds:
+                arr = ds.read()
+            m = arr[1] > 0
+            frac = arr[0][m] - 1_000_000_000.0
+            has_a = int(((frac > 0.15) & (frac < 0.26)).sum())
+            has_b = int(((frac > 0.42) & (frac < 0.51)).sum())
+            ok = arr.dtype == np.float64 and arr.shape == (2, 256, 256) and has_a > 50000 and has_b > 2000
+            rec(lb, ok, f"dtype={arr.dtype} a_px={has_a} b_fill_px={has_b} frac=[{frac.min():.4f}..{frac.max():.4f}]", p)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
+
     return ran
 
 
@@ -6973,6 +7128,16 @@ def main() -> int:
                 ("BETTER W81 SEMITRANS-U16 tile .png (cw exact RGB+alpha, tt blacks out translucent RGB)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w81_semitrans_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "better_w81_semitrans_u16_png"),
                 ("PARITY W81 SEMITRANS-U16 tile .npy (continuous u16 alpha)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w81_semitrans_rgba_u16'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
                 ("BETTER W81 SEMITRANS-U16 /bbox 64x64.png (cw exact RGB+alpha, tt blacks out translucent RGB)", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w81_semitrans_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "better_w81_semitrans_u16_png"),
+                # --- Wave 82: #657 exact float64 (>1e9) STAC multi-asset + #670 out-of-matrix 404 parity ---
+                ("PARITY W82 #657 STAC f64 >1e9 2-asset tile .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w82_stac_f64'])}&assets=a&assets=b", None, "npy_f64_multi_exact"),
+                ("PARITY W82 #657 STAC f64 >1e9 2-asset tile .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w82_stac_f64'])}&assets=a&assets=b", None, "geotiff_f64_multi_exact"),
+                ("PARITY W82 #657 STAC f64 >1e9 2-asset /bbox 64x64.npy", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w82_stac_f64'])}&assets=a&assets=b", None, "npy_f64_multi_exact"),
+                ("PARITY W82 #657 STAC f64 >1e9 2-asset /bbox 64x64.tif", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.tif?url={q(s['w82_stac_f64'])}&assets=a&assets=b", None, "geotiff_f64_multi_exact"),
+                ("PARITY W82 #657 STAC f64 >1e9 2-asset /preview 64 .npy", "GET", f"/stac/preview.npy?url={q(s['w82_stac_f64'])}&assets=a&assets=b&max_size=64", None, "npy_f64_multi_exact"),
+                ("PARITY W82 #657 STAC f64 >1e9 2-asset /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w82_stac_f64'])}&assets=a&assets=b", None, "point_f64_multi_exact"),
+                ("PARITY W82 #670 OOM-TILE WebMercatorQuad 10/164/1024 -> 404", "GET", f"/cog/tiles/WebMercatorQuad/10/164/1024.png?url={q(s['w82_f64_a'])}", None, "status_404_parity"),
+                ("PARITY W82 #670 OOM-TILE WorldCRS84Quad 2/4/0 -> 404", "GET", f"/cog/tiles/WorldCRS84Quad/2/4/0.png?url={q(s['w82_f64_a'])}", None, "status_404_parity"),
+                ("PARITY W82 #670 OOM-TILE STAC 10/164/1024 -> 404", "GET", f"/stac/tiles/WebMercatorQuad/10/164/1024.png?url={q(s['w82_stac_f64'])}&assets=a", None, "status_404_parity"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7052,6 +7217,15 @@ def main() -> int:
                                 merr = float(np.max(np.abs(ac[0][both] - ag[0][both]))) if both.any() else 999.0
                                 gok = ac.dtype == np.float64 and ag.dtype == np.float64 and bool((mc == mg).all()) and merr < 1e-4
                                 gd = f"f64 max_abs_err={merr:.6f}"
+                            elif kind == "npy_f64_multi_exact":
+                                ac, ag = np.load(io.BytesIO(r_cw.content)), np.load(io.BytesIO(r_gpu.content))
+                                gok = ac.dtype == np.float64 and ag.dtype == np.float64 and ac.shape == ag.shape and bool(np.array_equal(ac, ag, equal_nan=True))
+                                gd = f"f64 multi exact={gok} shape={ac.shape}"
+                            elif kind == "geotiff_f64_multi_exact":
+                                with rasterio.MemoryFile(r_cw.content) as mfc, mfc.open() as dc, rasterio.MemoryFile(r_gpu.content) as mfg, mfg.open() as dg:
+                                    ac, ag = dc.read(), dg.read()
+                                    gok = ac.dtype == np.float64 and ag.dtype == np.float64 and ac.shape == ag.shape and bool(np.array_equal(ac, ag, equal_nan=True))
+                                    gd = f"f64 multi tif exact={gok} shape={ac.shape}"
                             elif kind == "geotiff_f64_exact":
                                 with rasterio.MemoryFile(r_cw.content) as mfc, mfc.open() as dc, rasterio.MemoryFile(r_gpu.content) as mfg, mfg.open() as dg:
                                     ac, ag = dc.read(), dg.read()
@@ -7555,6 +7729,52 @@ def main() -> int:
                             aerr = abs(vc[0] - vt[0]) if len(vc) == 1 and len(vt) == 1 else 999.0
                             ok = aerr < 1e-4 and abs(vc[0] - 1_000_000_000.256) < 1e-4
                             detail = f"cw={vc} tt={vt} abs_err={aerr:.6f}"
+                    elif kind == "npy_f64_multi_exact":
+                        if r_cw.status_code != 200 or r_tt.status_code != 200:
+                            ok, detail = False, f"HTTP cw={r_cw.status_code} tt={r_tt.status_code}"
+                        else:
+                            ac, at = np.load(io.BytesIO(r_cw.content)), np.load(io.BytesIO(r_tt.content))
+                            low = np.finfo(np.float64).min
+                            mc, mt = ac[-1] > low, at[-1] > low
+                            mask_eq = float((mc == mt).mean()) * 100.0
+                            merr, mean_err = 0.0, 0.0
+                            for bi in range(ac.shape[0] - 1):
+                                valid_b = mc & mt & np.isfinite(ac[bi]) & np.isfinite(at[bi]) & (ac[bi] > 1e8) & (at[bi] > 1e8)
+                                if valid_b.any():
+                                    diffs = np.abs(ac[bi][valid_b] - at[bi][valid_b])
+                                    merr = max(merr, float(diffs.max()))
+                                    mean_err = max(mean_err, float(diffs.mean()))
+                            # Allow 1-pixel nearest-neighbor boundary tie (0.001) while strictly rejecting f32 loss (~0.30 mean / 0.495 max)
+                            ok = ac.dtype == np.float64 and at.dtype == np.float64 and ac.shape == at.shape and mask_eq >= 99.0 and mean_err < 1e-4 and merr < 0.002
+                            detail = f"f64 multi {ac.shape} mask={mask_eq:.2f}% mean_err={mean_err:.8f} max_err={merr:.8f}"
+                    elif kind == "geotiff_f64_multi_exact":
+                        if r_cw.status_code != 200 or r_tt.status_code != 200:
+                            ok, detail = False, f"HTTP cw={r_cw.status_code} tt={r_tt.status_code}"
+                        else:
+                            with rasterio.MemoryFile(r_cw.content) as mfc, mfc.open() as dc, rasterio.MemoryFile(r_tt.content) as mft, mft.open() as dt:
+                                ac, at = dc.read(), dt.read()
+                                mc, mt = ac[-1] > 0, at[-1] > 0
+                                mask_eq = float((mc == mt).mean()) * 100.0
+                                merr, mean_err = 0.0, 0.0
+                                for bi in range(ac.shape[0] - 1):
+                                    valid_b = mc & mt & np.isfinite(ac[bi]) & np.isfinite(at[bi]) & (ac[bi] > 1e8) & (at[bi] > 1e8)
+                                    if valid_b.any():
+                                        diffs = np.abs(ac[bi][valid_b] - at[bi][valid_b])
+                                        merr = max(merr, float(diffs.max()))
+                                        mean_err = max(mean_err, float(diffs.mean()))
+                                ok = ac.dtype == np.float64 and at.dtype == np.float64 and ac.shape == at.shape and mask_eq >= 99.0 and mean_err < 1e-4 and merr < 0.002
+                                detail = f"f64 multi tif {ac.shape} mask={mask_eq:.2f}% mean_err={mean_err:.8f} max_err={merr:.8f}"
+                    elif kind == "point_f64_multi_exact":
+                        if r_cw.status_code != 200 or r_tt.status_code != 200:
+                            ok, detail = False, f"HTTP cw={r_cw.status_code} tt={r_tt.status_code}"
+                        else:
+                            vc, vt = r_cw.json().get("values", []), r_tt.json().get("values", [])
+                            merr = max(abs(a - b) for a, b in zip(vc, vt)) if len(vc) == 2 and len(vt) == 2 else 999.0
+                            ok = len(vc) == 2 and merr < 1e-5 and abs(vc[0] - 1_000_000_000.189) < 1e-3 and abs(vc[1] - 1_000_000_000.439) < 1e-3
+                            detail = f"cw={vc} tt={vt} max_abs_err={merr:.8f}"
+                    elif kind == "status_404_parity":
+                        ok = r_cw.status_code == 404 and r_tt.status_code == 404
+                        detail = f"cw={r_cw.status_code} tt={r_tt.status_code}"
                     elif kind == "better_aspect_w40":
                         if r_cw.status_code != 200 or r_tt.status_code != 422:
                             ok, detail = False, f"HTTP cw={r_cw.status_code} (exp 200) tt={r_tt.status_code} (exp 422)"

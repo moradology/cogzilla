@@ -1018,7 +1018,7 @@ where
                 Some(&cogs[0]),
                 &bands,
                 st,
-                cogs.len() == 1 && slot_bands.is_none(),
+                slot_bands.is_none(),
             );
             if pq_stac.unscale {
                 apply_unscale_cogs(&mut bands, &cogs, slot_bands.as_deref());
@@ -1184,8 +1184,7 @@ where
                     if pq_stac.unscale {
                         apply_unscale_cogs(&mut treq.bands, &cogs, slot_bands.as_deref());
                     }
-                    if cogs.len() == 1
-                        && slot_bands.is_none()
+                    if slot_bands.is_none()
                         && matches!(treq.format, OutputFormat::RawF32 | OutputFormat::Npy)
                     {
                         treq.format = geotiff_render_format(
@@ -1647,7 +1646,7 @@ where
                     Some(&cogs[0]),
                     &bands,
                     st,
-                    cogs.len() == 1 && slot_bands.is_none(),
+                    slot_bands.is_none(),
                 )
             };
             if pq_stac.unscale {
@@ -1731,7 +1730,7 @@ where
                 Some(&cogs[0]),
                 &bands,
                 st,
-                cogs.len() == 1 && slot_bands.is_none(),
+                slot_bands.is_none(),
             );
             if pq_stac.unscale {
                 apply_unscale_cogs(&mut bands, &cogs, slot_bands.as_deref());
@@ -1816,7 +1815,7 @@ where
                     Some(&cogs[0]),
                     &bands,
                     st,
-                    cogs.len() == 1 && slot_bands.is_none(),
+                    slot_bands.is_none(),
                 )
             };
             if pq_stac.unscale {
@@ -1901,7 +1900,7 @@ where
                 Some(&cogs[0]),
                 &bands,
                 st,
-                cogs.len() == 1 && slot_bands.is_none(),
+                slot_bands.is_none(),
             );
             if pq_stac.unscale {
                 apply_unscale_cogs(&mut bands, &cogs, slot_bands.as_deref());
@@ -1984,7 +1983,7 @@ where
                 Some(&cogs[0]),
                 &bands,
                 st,
-                cogs.len() == 1 && slot_bands.is_none(),
+                slot_bands.is_none(),
             );
             if pq_stac.unscale {
                 apply_unscale_cogs(&mut bands, &cogs, slot_bands.as_deref());
@@ -2046,7 +2045,7 @@ where
                     Some(&cogs[0]),
                     &bands,
                     st,
-                    cogs.len() == 1 && slot_bands.is_none(),
+                    slot_bands.is_none(),
                 )
             };
             if pq_stac.unscale {

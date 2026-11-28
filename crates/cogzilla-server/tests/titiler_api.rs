@@ -7951,5 +7951,69 @@ async fn multi_cog_and_mosaic_preserve_exact_float64_precision() {
         "mosaic tile lost f64 precision on fallback scene (expected exact {v_b})"
     );
 
+    // 3. STAC multi-asset /stac/tiles and /stac/bbox .npy stacking assets a & b: exact f64 preserved!
+    let stac_json = tmp.join("stac_f64.json");
+    std::fs::write(
+        &stac_json,
+        serde_json::json!({
+            "type": "Feature",
+            "stac_version": "1.0.0",
+            "id": "f64-pair",
+            "bbox": [5.625, 36.597889, 11.25, 40.979898],
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[5.625, 36.597889], [11.25, 36.597889], [11.25, 40.979898], [5.625, 40.979898], [5.625, 36.597889]]]
+            },
+            "properties": {"datetime": "2026-01-01T00:00:00Z"},
+            "assets": {
+                "a": {"href": cog_a.display().to_string(), "type": "image/tiff; application=geotiff"},
+                "b": {"href": cog_b.display().to_string(), "type": "image/tiff; application=geotiff"}
+            },
+            "links": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let r_stac_tile = client
+        .get(format!(
+            "{base}/stac/tiles/WebMercatorQuad/6/33/24.npy?url={}&assets=a&assets=b&resampling=nearest",
+            stac_json.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r_stac_tile.status(), 200);
+    let stac_vals = parse_f64_npy(&r_stac_tile.bytes().await.unwrap());
+    assert_eq!(stac_vals.len(), 3 * npix);
+    assert!(
+        stac_vals[..npix].contains(&v_a),
+        "STAC multi-asset /stac/tiles band 0 lost f64 precision (expected exact {v_a})"
+    );
+    assert!(
+        stac_vals[npix..2 * npix].contains(&v_b),
+        "STAC multi-asset /stac/tiles band 1 lost f64 precision (expected exact {v_b})"
+    );
+
+    let r_stac_bbox = client
+        .get(format!(
+            "{base}/stac/bbox/6.0,37.0,10.5,40.5/16x16.npy?url={}&assets=a&assets=b&resampling=nearest",
+            stac_json.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r_stac_bbox.status(), 200);
+    let stac_bbox_vals = parse_f64_npy(&r_stac_bbox.bytes().await.unwrap());
+    let bpix = 16 * 16;
+    assert_eq!(stac_bbox_vals.len(), 3 * bpix);
+    assert!(
+        stac_bbox_vals[..bpix].contains(&v_a),
+        "STAC multi-asset /stac/bbox band 0 lost f64 precision (expected exact {v_a})"
+    );
+    assert!(
+        stac_bbox_vals[bpix..2 * bpix].contains(&v_b),
+        "STAC multi-asset /stac/bbox band 1 lost f64 precision (expected exact {v_b})"
+    );
+
     let _ = std::fs::remove_dir_all(&tmp);
 }
