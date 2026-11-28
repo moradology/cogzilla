@@ -127,13 +127,51 @@ fn single_expr_type(expr: &str, read: SampleType) -> SampleType {
                 .any(|c| c == b'/' || c == b'.' || c == b'^' || (c.is_ascii_alphabetic() && c != b'b'))
     };
     // float32 stays float32 through operations and most functions; a literal with a
-    // fraction/exponent or a double-only numexpr function (`minimum`, `maximum`) promotes to float64.
-    let plain = |e: &str| {
+    // fraction/exponent promotes to float64 EXCEPT when it is the constant exponent of `**`
+    // (numexpr compiles `pow(f32, float_const)` in single precision), and double-only numexpr
+    // functions (`minimum`, `maximum`) promote to float64.
+    let has_non_pow_float_literal = |e: &str| {
         let bytes = e.as_bytes();
-        !bytes.contains(&b'.')
-            && !bytes.windows(2).any(|w| w[0].is_ascii_digit() && matches!(w[1], b'e' | b'E'))
-            && !e.contains("minimum(")
-            && !e.contains("maximum(")
+        let mut i = 0usize;
+        while i < bytes.len() {
+            // Skip numeric literal immediately following `**` (e.g. `b1**0.5`, `b2**-1.5`).
+            if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                i += 2;
+                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                if i < bytes.len() && matches!(bytes[i], b'+' | b'-') {
+                    i += 1;
+                }
+                while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                    i += 1;
+                }
+                if i < bytes.len() && matches!(bytes[i], b'e' | b'E') {
+                    i += 1;
+                    if i < bytes.len() && matches!(bytes[i], b'+' | b'-') {
+                        i += 1;
+                    }
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            if bytes[i] == b'.' {
+                return true;
+            }
+            if bytes[i].is_ascii_digit()
+                && i + 1 < bytes.len()
+                && matches!(bytes[i + 1], b'e' | b'E')
+            {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    };
+    let plain = |e: &str| {
+        !has_non_pow_float_literal(e) && !e.contains("minimum(") && !e.contains("maximum(")
     };
     if read == SampleType::Float32 && plain(trimmed) {
         SampleType::Float32
@@ -428,6 +466,9 @@ mod tests {
         assert_eq!(kind("b1^-1", T::Uint8), T::Float64);
         assert_eq!(kind("b1**3", T::Uint16), T::Float64);
         assert_eq!(kind("b1**-1", T::Float32), T::Float32);
+        assert_eq!(kind("(b1**0.5)+(b2**1.5)", T::Float32), T::Float32);
+        assert_eq!(kind("(b1**0.5)+0.1", T::Float32), T::Float64);
+        assert_eq!(kind("b1**0.5", T::Uint8), T::Float64);
         // where(cond, a, b) takes its type from (a, b), not float literals in cond
         for read in [T::Uint8, T::Uint16, T::Int16, T::Float32, T::Float64] {
             assert_eq!(kind("where((b1>0.1)&(b2<0.3),1,0)", read), T::Int32, "{read:?}");

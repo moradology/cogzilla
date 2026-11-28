@@ -1736,6 +1736,18 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(f32_60, 1)
     out["w60_wide_4to1"] = p_w60_wide
 
+    # Wave 65: Float32 COG whose bottom half (rows 64..128, covering all of tile 10/164/396) is 100% nodata
+    p_w65_and = synth_dir / "w65_all_nodata_tile.tif"
+    f32_65 = np.full((128, 128), -9999.0, dtype=np.float32)
+    f32_65[:64, :64] = (20.0 + xx9[:64, :64] * 1.5 + yy9[:64, :64] * 0.8).astype(np.float32)
+    with rasterio.open(
+        p_w65_and, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_65, 1)
+    out["w65_all_nodata_tile"] = p_w65_and
+
     return out
 
 
@@ -5991,6 +6003,20 @@ def main() -> int:
                 ("PARITY W64 RETURN_MASK=false STAC tile 5-band .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w36_stac5b'])}&assets=ms&return_mask=false", None, "npy"),
                 ("PARITY W64 STAC /stac/info.geojson", "GET", f"/stac/info.geojson?url={q(s['w36_stac5b'])}&assets=ms", None, "stac_info_geojson"),
                 ("PARITY W64 EXPR nested where(b1>100,where(b2>120,b3,b2),b1) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('where(b1>100,where(b2>120,b3,b2),b1)')}", None, "npy"),
+                # --- Wave 65: Compound boolean & transcendental expr VM, dual non-4326 CRSs (32610 -> 3857), all-nodata interior tile/polygon ---
+                ("PARITY W65 EXPR where((b1>100)&(b2<150),b3,0) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('where((b1>100)&(b2<150),b3,0)')}", None, "npy"),
+                ("PARITY W65 EXPR where((b1<95)|(b2>155),255,50) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('where((b1<95)|(b2>155),255,50)')}", None, "npy"),
+                ("PARITY W65 EXPR power (b1**0.5)+(b2**1.5) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('(b1**0.5)+(b2**1.5)')}", None, "npy"),
+                ("PARITY W65 EXPR arctan2(b2-120,b1-100) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('arctan2(b2-120,b1-100)')}", None, "npy"),
+                ("PARITY W65 EXPR tanh+tan .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w48_expr3b'])}&expression={qe('tanh((b1-100)*0.02)+tan(b2*0.004)')}", None, "npy"),
+                ("PARITY W65 DUAL-CRS bbox coord=32610 dst=3857 .npy", "GET", f"/cog/bbox/{','.join(f'{v:.2f}' for v in rasterio.warp.transform_bounds('EPSG:4326', 'EPSG:32610', -122.4, 37.6, -122.1, 37.9))}/64x64.npy?url={q(s['w37_cog'])}&coord_crs=EPSG:32610&dst_crs=EPSG:3857", None, "npy"),
+                ("PARITY W65 DUAL-CRS bbox coord=32610 dst=3857 .tif", "GET", f"/cog/bbox/{','.join(f'{v:.2f}' for v in rasterio.warp.transform_bounds('EPSG:4326', 'EPSG:32610', -122.4, 37.6, -122.1, 37.9))}/64x64.tif?url={q(s['w37_cog'])}&coord_crs=EPSG:32610&dst_crs=EPSG:3857", None, "geotiff"),
+                ("PARITY W65 DUAL-CRS feature coord=32610 dst=3857 .npy", "POST", f"/cog/feature/64x64.npy?url={q(s['w37_cog'])}&coord_crs=EPSG:32610&dst_crs=EPSG:3857", w37_poly_utm, "npy"),
+                ("PARITY W65 DUAL-CRS STAC bbox coord=32610 dst=3857 .npy", "GET", f"/stac/bbox/{','.join(f'{v:.2f}' for v in rasterio.warp.transform_bounds('EPSG:4326', 'EPSG:32610', -122.4, 37.6, -122.1, 37.9))}/64x64.npy?url={q(s['w36_stac5b'])}&assets=ms&coord_crs=EPSG:32610&dst_crs=EPSG:3857", None, "npy"),
+                ("PARITY W65 ALL-NODATA interior tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w65_all_nodata_tile'])}&rescale=0,200&colormap_name=viridis", None, "png"),
+                ("PARITY W65 ALL-NODATA interior tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w65_all_nodata_tile'])}", None, "npy"),
+                ("PARITY W65 ALL-NODATA interior /point", "GET", f"/cog/point/-122.25,37.65?url={q(s['w65_all_nodata_tile'])}", None, "point"),
+                ("PARITY W65 ALL-NODATA interior POST /statistics", "POST", f"/cog/statistics?url={q(s['w65_all_nodata_tile'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.4, 37.55], [-122.1, 37.55], [-122.1, 37.70], [-122.4, 37.70], [-122.4, 37.55]]]}}, "post_stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
