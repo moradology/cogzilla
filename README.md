@@ -14,12 +14,12 @@
 | :--- | ---: | ---: | ---: |
 | CPU per 1,000 tiles, cold miss (real S3 COGs, Apple M5) | **13.2 CPU-s** | 56.0 CPU-s | **4.3× less** |
 | CPU per 1,000 tiles, cached blocks (real S3 COGs, Apple M5) | **1.7 CPU-s** | 55.3 CPU-s | **32× less** |
-| Warm `256²` Mercator PNG over HTTP (Apple M5 `10C`, `c=32`) | **20,025 req/s** | 877 req/s | **23×** |
-| Warm `256²` RGB PNG over HTTP (3960X `48T` / M5 `10C`) | **7,622 / 7,298** | 952 / 419 | **8–17×** |
-| Warm `512²` RGB Lanczos3 JPEG (`c=32`, 3960X `48T` / M5 `10C`) | **7,908 / 3,288** | 240 / 104 | **32–33×** |
-| Reprojected UTM RGB / STAC band-math tile (M5, 1 core, warm) | **0.94 / 0.73 ms** | 9.1 / 23.6 ms | **10–32×** |
-| GeoJSON polygon statistics / 3-asset STAC point (M5, 1 core, warm) | **12.9 / 0.25 ms** | 55.2 / 15.2 ms | **4.3× / 62×** |
-| Memory at idle (M5, 1 process vs 10 TiTiler workers) | **9.8 MiB** | 1,236 MiB | **126× less** |
+| Warm `256²` Mercator PNG over HTTP (Apple M5 `10C`, `c=32`) | **15,630 req/s** | 877 req/s | **18×** |
+| Warm `256²` RGB PNG over HTTP (3960X `48T` / M5 `10C`) | **7,622 / 8,427** | 952 / 419 | **8–20×** |
+| Warm `512²` RGB Lanczos3 JPEG (`c=32`, 3960X `48T` / M5 `10C`) | **7,908 / 5,502** | 240 / 104 | **33–53×** |
+| Reprojected UTM RGB / STAC band-math tile (M5, 1 core, warm) | **0.93 / 0.72 ms** | 9.4 / 23.7 ms | **10–33×** |
+| GeoJSON polygon statistics / 3-asset STAC point (M5, 1 core, warm) | **12.6 / 0.25 ms** | 54.6 / 15.2 ms | **4.3× / 60×** |
+| Memory at idle (M5, 1 process vs 10 TiTiler workers) | **10.9 MiB** | 1,233 MiB | **113× less** |
 
 Plan with the 4.3×: uncached tiles are what an origin behind a CDN mostly serves. The larger multiples need the block cache to hold your working set, and the warm rows are local files with no network. Full tables, hardware specs, and caveats are in [docs/benchmarks.md](docs/benchmarks.md) and [docs/gpu-benchmarks.md](docs/gpu-benchmarks.md).
 
@@ -45,7 +45,7 @@ Plan with the 4.3×: uncached tiles are what an origin behind a CDN mostly serve
   <img src="assets/terrain-gallery.jpg" alt="Mt. Rainier rendered six ways by cogzilla: colormapped elevation, hillshade, slope, aspect, Terrarium RGB and Mapbox Terrain-RGB" width="100%" />
 </p>
 
-Mt. Rainier from the public Copernicus 30 m DEM on S3, six ways from one file: colormapped elevation, hillshade, slope, aspect, and the Terrarium and Mapbox Terrain-RGB encodings that drive 3D terrain in MapLibre. Nothing is pre-rendered: every tile is resampled, shaded, colormapped and encoded when it is requested, at **7,952 hillshade tiles/s** (`1.69 ms` p50, encoded-tile cache off) on an Apple M5 once source blocks are cached.
+Mt. Rainier from the public Copernicus 30 m DEM on S3, six ways from one file: colormapped elevation, hillshade, slope, aspect, and the Terrarium and Mapbox Terrain-RGB encodings that drive 3D terrain in MapLibre. Nothing is pre-rendered: every tile is resampled, shaded, colormapped and encoded when it is requested, at **6,778 hillshade tiles/s** (`4.05 ms` p50, `23.9 ms` p99 at `c=32`, encoded-tile cache off) on an Apple M5 once source blocks are cached.
 
 ## Try the demo
 
