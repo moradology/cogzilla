@@ -365,11 +365,32 @@ pub(crate) fn block_in_place_if_multithread<R>(should_offload: bool, f: impl FnO
     }
 }
 
-/// Run a synchronous CPU tile render, moving heavy non-Nearest renders (`N >= 256`) off Tokio's
-/// async I/O worker pool via [`block_in_place_if_multithread`].
+fn cpu_render_semaphore() -> &'static tokio::sync::Semaphore {
+    static SEM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SEM.get_or_init(|| {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        tokio::sync::Semaphore::new(cores)
+    })
+}
+
+/// Run a synchronous CPU tile render, gating concurrent renders to `available_parallelism()` via a
+/// FIFO async semaphore before calling [`block_in_place_if_multithread`]. This prevents OS
+/// scheduler oversubscription (e.g. 32–64 threads time-slicing on 10 cores) and bounds thread-local
+/// scratch RSS while keeping Tokio's async I/O workers free for `/healthz` and socket I/O.
 #[inline]
-fn run_cpu_render<R>(n: usize, resample: ResampleMode, f: impl FnOnce() -> R) -> R {
-    block_in_place_if_multithread(n >= 256 && !matches!(resample, ResampleMode::Nearest), f)
+async fn run_cpu_render<R>(n: usize, resample: ResampleMode, f: impl FnOnce() -> R) -> R {
+    // Sub-millisecond <=256px Nearest/Bilinear renders run inline on Tokio's N_cores workers
+    // (avoiding block_in_place worker-handoff churn while remaining naturally bounded to N_cores).
+    // Heavier renders (>256px or Cubic/Lanczos/DEM/footprint) acquire the FIFO N_cores semaphore
+    // and move off Tokio's async I/O workers via block_in_place.
+    let heavy = n > 256 || !matches!(resample, ResampleMode::Nearest | ResampleMode::Bilinear);
+    if !heavy {
+        return f();
+    }
+    let _permit = cpu_render_semaphore().acquire().await.ok();
+    block_in_place_if_multithread(true, f)
 }
 
 /// Resampling kernel support margin `(lo, hi)` in source pixels relative to
@@ -1239,7 +1260,7 @@ impl TileEngine {
                     }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_single_band::<N>(&plan, &src, &style)
-                }))
+                }).await)
             }
             BandRequest::Terrain {
                 band_1based,
@@ -1326,7 +1347,7 @@ impl TileEngine {
                     }
                 Ok(run_cpu_render(N, req.resample, || {
                     render_terrain_tile::<N>(&plan, &src, *algorithm, req.resample, req.format)
-                }))
+                }).await)
             }
             BandRequest::Dem {
                 band_1based,
@@ -1426,7 +1447,7 @@ impl TileEngine {
                     }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_dem_algorithm::<N>(&plan, &src, *algorithm, pixel_size_m, &style)
-                }))
+                }).await)
             }
             BandRequest::Spectral1 {
                 expr,
@@ -1494,7 +1515,7 @@ impl TileEngine {
                     }
                 Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath1::<N>(&plan, &src, *expr, &style)
-                }))
+                }).await)
             }
             BandRequest::SarRgb {
                 bands_1based,
@@ -1578,7 +1599,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_sar_rgb::<N>(&plan, &srcs, &style)
-                }))
+                }).await)
                     }
                     PlanarConfig::Planar => {
                         let mut indices = Vec::with_capacity(grid_len * 2);
@@ -1629,7 +1650,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_sar_rgb::<N>(&plan, &srcs, &style)
-                }))
+                }).await)
                     }
                 }
             }
@@ -1728,7 +1749,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                             render_rgb_bands::<N>(&plan, &srcs, &style)
-                        }))
+                        }).await)
                     }
                     PlanarConfig::Planar => {
                         // Fetch all 3 planes in one coalesced call
@@ -1799,7 +1820,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                             render_rgb_bands::<N>(&plan, &srcs, &style)
-                        }))
+                        }).await)
                     }
                 }
             }
@@ -1888,7 +1909,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath2::<N>(&plan, &srcs, *expr, &style)
-                }))
+                }).await)
                     }
                     PlanarConfig::Planar => {
                         let mut indices = Vec::with_capacity(grid_len * 2);
@@ -1940,7 +1961,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath2::<N>(&plan, &srcs, *expr, &style)
-                }))
+                }).await)
                     }
                 }
             }
@@ -2040,7 +2061,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath3::<N>(&plan, &srcs, *expr, &style)
-                }))
+                }).await)
                     }
                     PlanarConfig::Planar => {
                         let mut indices = Vec::with_capacity(grid_len * 3);
@@ -2112,7 +2133,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_bandmath3::<N>(&plan, &srcs, *expr, &style)
-                }))
+                }).await)
                     }
                 }
             }
@@ -2201,7 +2222,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_expr_vm::<N>(&plan, &srcs, prog, &style, (ifd.width, ifd.height))
-                }))
+                }).await)
                     }
                     PlanarConfig::Planar => {
                         let mut indices = Vec::with_capacity(grid_len * nb);
@@ -2254,7 +2275,7 @@ impl TileEngine {
                             }
                         Ok(run_cpu_render(N, style.resample, || {
                     render_expr_vm::<N>(&plan, &srcs, prog, &style, (ifd.width, ifd.height))
-                }))
+                }).await)
                     }
                 }
             }
