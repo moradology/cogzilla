@@ -2225,6 +2225,85 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         assert ds.colorinterp[1] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 2, got {ds.colorinterp}"
     out["w80_planar_gray_alpha_u16"] = p_w80_planar_ga16
 
+    # Wave 81: Continuous / semi-transparent alpha (0 < alpha < full_opaque)
+    # Four regimes inside tile 10/164/396 (cols 46.86..111.14, rows 69.74..120.69):
+    #   col < 55: opaque (255 / 65535), 55 <= col < 90: smooth gradient,
+    #   col >= 90: 50% translucent (128 / 32768), [75:95, 60:80]: transparent hole (0).
+    alpha81_u8 = np.full((128, 128), 255, dtype=np.uint8)
+    for c_i in range(55, 90):
+        alpha81_u8[:, c_i] = int(round(20 + (c_i - 55) * (220.0 / 34.0)))
+    alpha81_u8[:, 90:] = 128
+    alpha81_u8[75:95, 60:80] = 0
+
+    rgba8_w81 = np.stack([
+        (30 + xx9 * 1.2).clip(0, 255).astype(np.uint8),
+        (50 + yy9 * 1.1).clip(0, 255).astype(np.uint8),
+        (20 + (xx9 + yy9) * 0.7).clip(0, 255).astype(np.uint8),
+        alpha81_u8,
+    ])
+    p_w81_rgba8 = synth_dir / "w81_semitrans_rgba_u8.tif"
+    with rasterio.open(
+        p_w81_rgba8, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_w81)
+    with rasterio.open(p_w81_rgba8) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w81_semitrans_rgba_u8"] = p_w81_rgba8
+
+    p_w81_planar8 = synth_dir / "w81_semitrans_planar_rgba_u8.tif"
+    with rasterio.open(
+        p_w81_planar8, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="deflate", photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_w81)
+    with rasterio.open(p_w81_planar8) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w81_semitrans_planar_rgba_u8"] = p_w81_planar8
+
+    alpha81_u16 = np.full((128, 128), 65535, dtype=np.uint16)
+    for c_i in range(55, 90):
+        alpha81_u16[:, c_i] = int(round(5000 + (c_i - 55) * (55000.0 / 34.0)))
+    alpha81_u16[:, 90:] = 32768
+    alpha81_u16[75:95, 60:80] = 0
+    rgba16_w81 = np.stack([
+        (500 + xx9 * 40).astype(np.uint16),
+        (800 + yy9 * 35).astype(np.uint16),
+        (300 + (xx9 + yy9) * 20).astype(np.uint16),
+        alpha81_u16,
+    ])
+    p_w81_rgba16 = synth_dir / "w81_semitrans_rgba_u16.tif"
+    with rasterio.open(
+        p_w81_rgba16, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=2, photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba16_w81)
+    with rasterio.open(p_w81_rgba16) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w81_semitrans_rgba_u16"] = p_w81_rgba16
+
     return out
 
 
@@ -6878,6 +6957,22 @@ def main() -> int:
                 ("PARITY W80 PLANAR-GRAY-ALPHA-U16 tile .png (viridis)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w80_planar_gray_alpha_u16'])}&bidx=1&rescale=0,6000&colormap_name=viridis", None, "png"),
                 ("PARITY W80 PLANAR-GRAY-ALPHA-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w80_planar_gray_alpha_u16'])}&bidx=1", None, "npy"),
                 ("PARITY W80 PLANAR-GRAY-ALPHA-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w80_planar_gray_alpha_u16'])}", None, "stats"),
+                # --- Wave 81: Continuous / semi-transparent alpha (0 < alpha < full_opaque) ---
+                ("PARITY W81 SEMITRANS-U8 tile 256 .png (nearest)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W81 SEMITRANS-U8 tile 256 .png (bilinear)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3&resampling=bilinear", None, "png"),
+                ("PARITY W81 SEMITRANS-U8 tile 512 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3&tilesize=512", None, "png"),
+                ("PARITY W81 SEMITRANS-U8 tile .webp", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.webp?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W81 SEMITRANS-U8 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("PARITY W81 SEMITRANS-U8 tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "geotiff"),
+                ("PARITY W81 SEMITRANS-U8 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W81 SEMITRANS-U8 POST /feature 64x64.png", "POST", f"/cog/feature/64x64.png?url={q(s['w81_semitrans_rgba_u8'])}&bidx=1&bidx=2&bidx=3", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "png"),
+                ("PARITY W81 SEMITRANS-U8 /preview 64 .png", "GET", f"/cog/preview.png?url={q(s['w81_semitrans_rgba_u8'])}&max_size=64&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("BETTER W81 SEMITRANS-U8 GET /cog/statistics (cw 97.56% valid, tt drops translucent px)", "GET", f"/cog/statistics?url={q(s['w81_semitrans_rgba_u8'])}", None, "better_w81_semitrans_stats"),
+                ("PARITY W81 SEMITRANS-PLANAR-U8 tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w81_semitrans_planar_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W81 SEMITRANS-PLANAR-U8 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w81_semitrans_planar_rgba_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("BETTER W81 SEMITRANS-U16 tile .png (cw exact RGB+alpha, tt blacks out translucent RGB)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w81_semitrans_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "better_w81_semitrans_u16_png"),
+                ("PARITY W81 SEMITRANS-U16 tile .npy (continuous u16 alpha)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w81_semitrans_rgba_u16'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("BETTER W81 SEMITRANS-U16 /bbox 64x64.png (cw exact RGB+alpha, tt blacks out translucent RGB)", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w81_semitrans_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "better_w81_semitrans_u16_png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7622,6 +7717,41 @@ def main() -> int:
                             hc, ht = jc["b1"]["histogram"], jt["b1"]["histogram"]
                             ok = len(hc[0]) == 5 and len(ht[0]) == 5 and max(abs(a - b) for a, b in zip(hc[1], ht[1])) < 1e-4
                             detail += f" bins={len(hc[0])} edges=[{hc[1][0]}..{hc[1][-1]}]"
+                    elif kind == "better_w81_semitrans_stats":
+                        jc, jt = r_cw.json(), r_tt.json()
+                        bc, bt = jc["b1"], jt["b1"]
+                        cw_ok = (
+                            bc["valid_pixels"] == 15984
+                            and bc["masked_pixels"] == 400
+                            and abs(bc["valid_percent"] - 97.56) < 0.05
+                            and abs(bc["max"] - 182.0) < 1e-3
+                            and abs(bc["mean"] - 105.6246) < 0.01
+                        )
+                        tt_drops = bt["valid_pixels"] == 7040 and abs(bt["max"] - 94.0) < 1e-3
+                        ok = cw_ok and tt_drops
+                        detail = f"cw valid={bc['valid_pixels']} ({bc['valid_percent']}%) max={bc['max']} vs tt valid={bt['valid_pixels']} ({bt['valid_percent']}%) max={bt['max']}"
+                    elif kind == "better_w81_semitrans_u16_png":
+                        ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
+                        at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
+                        op = ac[:, :, 3] == 255
+                        tr = (ac[:, :, 3] > 0) & (ac[:, :, 3] < 255)
+                        mask_eq = float(((ac[:, :, 3] > 0) == (at[:, :, 3] > 0)).mean()) * 100.0
+                        op_mae = float(np.abs(ac[op, :3].astype(float) - at[op, :3].astype(float)).mean()) if op.any() else 999.0
+                        cw_tr_mean = float(ac[tr, :3].mean()) if tr.any() else 0.0
+                        tt_tr_max = int(at[tr, :3].max()) if tr.any() else -1
+                        cw_tr_a = len(np.unique(ac[tr, 3]))
+                        tt_tr_a = len(np.unique(at[tr, 3]))
+                        ok = (
+                            ac.shape == at.shape
+                            and mask_eq >= 99.5
+                            and op_mae < 1.0
+                            and int(tr.sum()) > 1000
+                            and cw_tr_mean > 100.0
+                            and tt_tr_max == 0
+                            and cw_tr_a > 10
+                            and tt_tr_a > 10
+                        )
+                        detail = f"opaque_MAE={op_mae:.2f} translucent_px={int(tr.sum())} cw_rgb_mean={cw_tr_mean:.1f} vs tt_rgb_max={tt_tr_max} alpha_lvls={cw_tr_a}/{tt_tr_a}"
                     elif kind == "better_w79_rgbn_alpha_ndvi_png":
                         ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
                         at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
