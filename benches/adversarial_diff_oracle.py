@@ -1480,6 +1480,50 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     assert _has_tiff_tag(p_w54_ycbcr_jt, 347), "w54_ycbcr_jpeg_tables IFD must contain tag 347 JPEGTables"
     out["w54_ycbcr_jpeg_tables"] = p_w54_ycbcr_jt
 
+    # Wave 55: Float32 with 1-bit GDAL_TIFF_INTERNAL_MASK (no nodata tag), 4:1 non-square pixel aspect,
+    # and 512x512 multi-overview (2x/4x/8x) uint16 with scale/offset + nodata hole
+    p_w55_imask = synth_dir / "w55_f32_imask.tif"
+    f32_55 = (10.0 + xx9 * 1.5 + yy9 * 0.8).astype(np.float32)
+    mask55 = np.full((128, 128), 255, dtype=np.uint8)
+    mask55[80:110, 60:90] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(
+            p_w55_imask, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+            crs="EPSG:4326", transform=tf_w9, tiled=True, blockxsize=64, blockysize=64, compress="deflate",
+        ) as ds:
+            ds.write(f32_55, 1)
+            ds.write_mask(mask55)
+    out["w55_f32_imask"] = p_w55_imask
+
+    p_w55_ns = synth_dir / "w55_nonsquare_4to1.tif"
+    yy55, xx55 = np.mgrid[0:256, 0:64]
+    f32_ns = (50.0 + xx55 * 3.0 + yy55 * 0.75).astype(np.float32)
+    f32_ns[160:220, 30:45] = -9999.0
+    tf_w55_ns = from_bounds(-122.5, 37.5, -122.0, 38.0, 64, 256)
+    with rasterio.open(
+        p_w55_ns, "w", driver="GTiff", width=64, height=256, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w55_ns, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write(f32_ns, 1)
+    out["w55_nonsquare_4to1"] = p_w55_ns
+
+    p_w55_ovr = synth_dir / "w55_multi_ovr_unscale.tif"
+    yy55o, xx55o = np.mgrid[0:512, 0:512]
+    u16_ovr = (5000 + xx55o.astype(np.uint32) * 40 + yy55o.astype(np.uint32) * 30).astype(np.uint16)
+    u16_ovr[300:420, 220:360] = 65535
+    tf_w55_ovr = from_bounds(-122.5, 37.5, -122.0, 38.0, 512, 512)
+    with rasterio.open(
+        p_w55_ovr, "w", driver="GTiff", width=512, height=512, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w55_ovr, tiled=True, blockxsize=128, blockysize=128,
+        compress="deflate", nodata=65535,
+    ) as ds:
+        ds.write(u16_ovr, 1)
+        ds.scales = (0.001,)
+        ds.offsets = (-10.0,)
+        ds.build_overviews([2, 4, 8], rasterio.enums.Resampling.average)
+    out["w55_multi_ovr_unscale"] = p_w55_ovr
+
     return out
 
 
@@ -5575,6 +5619,18 @@ def main() -> int:
                 ("PARITY W54 RGB JPEG+JPEGTables /point", "GET", f"/cog/point/{(mercantile.bounds(164, 396, 10).west + mercantile.bounds(164, 396, 10).east) / 2:.5f},{(mercantile.bounds(164, 396, 10).south + mercantile.bounds(164, 396, 10).north) / 2:.5f}?url={q(s['w54_rgb_jpeg_tables'])}", None, "point"),
                 ("PARITY W54 YCbCr JPEG+JPEGTables .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w54_ycbcr_jpeg_tables'])}", None, "png"),
                 ("PARITY W54 YCbCr JPEG+JPEGTables .jpg", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.jpg?url={q(s['w54_ycbcr_jpeg_tables'])}", None, "png"),
+                # --- Wave 55: Float32 1-bit internal mask (no nodata), 4:1 non-square pixel aspect, multi-overview unscale ---
+                ("PARITY W55 F32 internal-mask (no nodata) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}", None, "npy"),
+                ("PARITY W55 F32 internal-mask bilinear viridis .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w55_f32_imask'])}&resampling=bilinear&rescale=10,300&colormap_name=viridis", None, "png"),
+                ("PARITY W55 F32 internal-mask /point valid", "GET", f"/cog/point/-122.25,37.75?url={q(s['w55_f32_imask'])}", None, "point"),
+                ("PARITY W55 F32 internal-mask /point inside hole", "GET", f"/cog/point/-122.20,37.65?url={q(s['w55_f32_imask'])}", None, "point"),
+                ("PARITY W55 F32 internal-mask /statistics", "GET", f"/cog/statistics?url={q(s['w55_f32_imask'])}", None, "stats"),
+                ("PARITY W55 F32 internal-mask expr b1*2+10 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('b1*2+10')}", None, "npy"),
+                ("PARITY W55 NON-SQUARE 4:1 pixel aspect .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_nonsquare_4to1'])}", None, "npy"),
+                ("PARITY W55 NON-SQUARE 4:1 cubic viridis .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w55_nonsquare_4to1'])}&resampling=cubic&rescale=50,450&colormap_name=viridis", None, "png"),
+                ("PARITY W55 NON-SQUARE 4:1 /point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w55_nonsquare_4to1'])}", None, "point"),
+                ("PARITY W55 MULTI-OVR unscale=true z10 bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_multi_ovr_unscale'])}&unscale=true&resampling=bilinear", None, "npy"),
+                ("PARITY W55 MULTI-OVR unscale=true z8 bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.npy?url={q(s['w55_multi_ovr_unscale'])}&unscale=true&resampling=bilinear", None, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
