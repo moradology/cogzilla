@@ -2480,6 +2480,74 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
     out["w84_lerc_planar_3b_u16"] = p_w84_lerc_planar
 
+    # Wave 85: Classic Big-Endian (MM) TIFFs across LZW+P2 u16, unscaled i16, DEFLATE+P3 f64 > 1e9,
+    # 4-band u16 RGBA (ExtraSamples), and planar-separate striped (RowsPerStrip=7) PackBits u16
+    p_w85_be_u16 = synth_dir / "w85_be_u16_lzw_p2.tif"
+    u16_w85 = (500 + xx9 * 35 + yy9 * 8).astype(np.uint16)
+    u16_w85[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w85_be_u16, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="lzw", predictor=2, nodata=0, endianness="BIG",
+    ) as ds:
+        ds.write(u16_w85, 1)
+    assert p_w85_be_u16.read_bytes()[:2] == b"MM", "expected Big-Endian MM TIFF header"
+    out["w85_be_u16_lzw_p2"] = p_w85_be_u16
+
+    p_w85_be_i16 = synth_dir / "w85_be_i16_unscale.tif"
+    i16_w85 = (-5000 + xx9.astype(np.int32) * 80 + yy9.astype(np.int32) * 40).astype(np.int16)
+    i16_w85[75:95, 60:80] = -32768
+    with rasterio.open(
+        p_w85_be_i16, "w", driver="GTiff", width=128, height=128, count=1, dtype="int16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-32768, endianness="BIG",
+    ) as ds:
+        ds.write(i16_w85, 1)
+        ds.scales = (0.1,)
+        ds.offsets = (-200.0,)
+    assert p_w85_be_i16.read_bytes()[:2] == b"MM", "expected Big-Endian MM TIFF header"
+    out["w85_be_i16_unscale"] = p_w85_be_i16
+
+    p_w85_be_f64 = synth_dir / "w85_be_f64_p3.tif"
+    with rasterio.open(
+        p_w85_be_f64, "w", driver="GTiff", width=128, height=128, count=1, dtype="float64",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=3, nodata=-9999.0, endianness="BIG",
+    ) as ds:
+        ds.write(f64_a, 1)
+    assert p_w85_be_f64.read_bytes()[:2] == b"MM", "expected Big-Endian MM TIFF header"
+    out["w85_be_f64_p3"] = p_w85_be_f64
+
+    p_w85_be_rgba16 = synth_dir / "w85_be_rgba_u16.tif"
+    with rasterio.open(
+        p_w85_be_rgba16, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=2, photometric="RGB", endianness="BIG",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba16)
+    assert p_w85_be_rgba16.read_bytes()[:2] == b"MM", "expected Big-Endian MM TIFF header"
+    with rasterio.open(p_w85_be_rgba16) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w85_be_rgba_u16"] = p_w85_be_rgba16
+
+    p_w85_be_pb = synth_dir / "w85_be_planar_striped7_pb.tif"
+    with rasterio.open(
+        p_w85_be_pb, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=False, blockysize=7,
+        interleave="band", compress="packbits", nodata=0, endianness="BIG",
+    ) as ds:
+        ds.write(lerc3_u16)
+    assert p_w85_be_pb.read_bytes()[:2] == b"MM", "expected Big-Endian MM TIFF header"
+    with rasterio.open(p_w85_be_pb) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
+    out["w85_be_planar_striped7_pb"] = p_w85_be_pb
+
     return out
 
 
@@ -7298,6 +7366,22 @@ def main() -> int:
                 ("PARITY W84 WEBP-RGBA-LOSSY /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w84_webp_rgba_lossy'])}&bidx=1&bidx=2&bidx=3", None, "png"),
                 ("PARITY W84 LERC-PLANAR-3B-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w84_lerc_planar_3b_u16'])}", None, "npy"),
                 ("PARITY W84 LERC-PLANAR-3B-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w84_lerc_planar_3b_u16'])}", None, "stats"),
+                # --- Wave 85: Classic Big-Endian (MM) TIFFs (LZW+P2 u16, unscaled i16, DEFLATE+P3 f64, u16 RGBA, planar striped-7 PackBits) ---
+                ("PARITY W85 BE-MM LZW+P2 u16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w85_be_u16_lzw_p2'])}", None, "npy"),
+                ("PARITY W85 BE-MM LZW+P2 u16 tile .png (viridis)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w85_be_u16_lzw_p2'])}&rescale=0,6000&colormap_name=viridis", None, "png"),
+                ("PARITY W85 BE-MM LZW+P2 u16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w85_be_u16_lzw_p2'])}", None, "stats"),
+                ("PARITY W85 BE-MM i16 unscale=true tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w85_be_i16_unscale'])}&unscale=true", None, "npy"),
+                ("PARITY W85 BE-MM i16 unscale=true /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w85_be_i16_unscale'])}&unscale=true", None, "point"),
+                ("PARITY W85 BE-MM i16 unscale=true GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w85_be_i16_unscale'])}&unscale=true", None, "stats"),
+                ("PARITY W85 BE-MM DEFLATE+P3 f64 >1e9 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w85_be_f64_p3'])}", None, "npy_f64_multi_exact"),
+                ("PARITY W85 BE-MM DEFLATE+P3 f64 >1e9 /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w85_be_f64_p3'])}", None, "point"),
+                ("PARITY W85 BE-MM RGBA-U16 tile .png (rescale 0..6000)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w85_be_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "png"),
+                ("PARITY W85 BE-MM RGBA-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w85_be_rgba_u16'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("PARITY W85 BE-MM RGBA-U16 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w85_be_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "png"),
+                ("PARITY W85 BE-MM RGBA-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w85_be_rgba_u16'])}", None, "stats"),
+                ("PARITY W85 BE-MM PLANAR-STRIPED-7 PACKBITS tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w85_be_planar_striped7_pb'])}", None, "npy"),
+                ("PARITY W85 BE-MM PLANAR-STRIPED-7 PACKBITS /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w85_be_planar_striped7_pb'])}", None, "npy"),
+                ("PARITY W85 BE-MM PLANAR-STRIPED-7 PACKBITS GET /stats", "GET", f"/cog/statistics?url={q(s['w85_be_planar_striped7_pb'])}", None, "stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
