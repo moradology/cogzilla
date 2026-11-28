@@ -2058,6 +2058,22 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     }))
     out["w76_stac_partial"] = p_w76_stac
 
+    # Wave 77: STAC item referencing the Wave 75 negative-elevation scaled int16 DEM
+    p_w77_stac_dem = synth_dir / "w77_stac_dem.json"
+    p_w77_stac_dem.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w77-stac-scaled-dem",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "dem": {"href": str(p_w75_dem), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w77_stac_dem"] = p_w77_stac_dem
+
     return out
 
 
@@ -6657,6 +6673,19 @@ def main() -> int:
                 ("PARITY W76 #654 GPU/CPU histogram exact inner-edge ties GET /statistics", "GET", f"/cog/statistics?url={q(s['w76_bin_edges_f32'])}&histogram_bins=10", None, "stats"),
                 ("PARITY W76 #654 GPU/CPU histogram exact inner-edge ties POST /statistics", "POST", f"/cog/statistics?url={q(s['w76_bin_edges_f32'])}&histogram_bins=10", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
                 ("BETTER W76 #655 aspect default buffer=3 matches explicit buffer=3 (cw 256, tt 422)", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.npy?url={q(merc)}&algorithm=aspect", None, "better_w76_aspect_default_buf"),
+                # --- Wave 77: STAC DEM algorithms + unscale=true, dual-stage reproject/resampling (256px inline vs 512px pool), STAC/COG WebP/JPEG+unscale ---
+                ("PARITY W77 STAC unscale+terrarium tile .png", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&algorithm=terrarium", None, "png"),
+                ("PARITY W77 STAC unscale+terrainrgb tile .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&algorithm=terrainrgb", None, "npy"),
+                ("PARITY W77 STAC unscale+hillshade buffer=3 tile .png", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&algorithm=hillshade&buffer=3", None, "png"),
+                ("PARITY W77 STAC unscale+slope buffer=3 tile .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&algorithm=slope&buffer=3", None, "npy"),
+                ("PARITY W77 STAC unscale+terrarium /bbox 64x64.png", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&algorithm=terrarium", None, "png"),
+                ("PARITY W77 STAC unscale+terrainrgb POST /feature 64x64.png", "POST", f"/stac/feature/64x64.png?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&algorithm=terrainrgb", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "png"),
+                ("PARITY W77 REPROJECT bilinear (256px inline) UTM->3857 .npy", "GET", f"/cog/tiles/WebMercatorQuad/12/652/1583.npy?url={q(sat)}&reproject=bilinear", None, "npy"),
+                ("PARITY W77 REPROJECT bilinear (512px pool) UTM->3857 .npy", "GET", f"/cog/tiles/WebMercatorQuad/12/652/1583.npy?url={q(sat)}&tilesize=512&reproject=bilinear", None, "npy"),
+                ("PARITY W77 REPROJECT cubic + resampling=bilinear UTM->3857 .npy", "GET", f"/cog/tiles/WebMercatorQuad/12/652/1583.npy?url={q(sat)}&reproject=cubic&resampling=bilinear", None, "npy"),
+                ("PARITY W77 STAC /bbox unscale=true viridis 64x64.webp", "GET", f"/stac/bbox/-122.45,37.55,-122.05,37.95/64x64.webp?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&rescale=-900,600&colormap_name=viridis", None, "png"),
+                ("PARITY W77 STAC POST /feature unscale=true viridis 64x64.jpg", "POST", f"/stac/feature/64x64.jpg?url={q(s['w77_stac_dem'])}&assets=dem&unscale=true&rescale=-900,600&colormap_name=viridis", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.75], [-122.05, 37.75], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.75]]]}}, "png"),
+                ("PARITY W77 COG /preview unscale=true viridis 64x64.webp", "GET", f"/cog/preview/64x64.webp?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&rescale=-1400,1100&colormap_name=viridis", None, "png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
