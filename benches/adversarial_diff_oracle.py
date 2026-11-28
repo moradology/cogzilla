@@ -2015,6 +2015,49 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.offsets = (-200.0,)
     out["w75_neg_dem_i16_scaled"] = p_w75_dem
 
+    # Wave 76: Regressions for #653 (partial-valid multi-band nodata), #654 (GPU histogram inner-edge ties), #655 (aspect default buffer=3)
+    p_w76_edges = synth_dir / "w76_bin_edges_f32.tif"
+    f32_edges = (((xx9 + yy9) % 11) * 10.0).astype(np.float32)  # exact bin edges 0,10,20,...,100 for histogram_bins=10
+    with rasterio.open(
+        p_w76_edges, "w", driver="GTiff", width=128, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate",
+    ) as ds:
+        ds.write(f32_edges, 1)
+    out["w76_bin_edges_f32"] = p_w76_edges
+
+    p_w76_left = synth_dir / "w76_partial_left_f32.tif"
+    with rasterio.open(
+        p_w76_left, "w", driver="GTiff", width=64, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_bounds(-122.6, 37.4, -122.15, 38.1, 64, 128),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write((100.0 + xx9[:, :64] * 2.0 + yy9[:, :64]).astype(np.float32), 1)
+
+    p_w76_right = synth_dir / "w76_partial_right_f32.tif"
+    with rasterio.open(
+        p_w76_right, "w", driver="GTiff", width=64, height=128, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_bounds(-122.25, 37.4, -121.9, 38.1, 64, 128),
+        tiled=True, blockxsize=64, blockysize=64, compress="deflate", nodata=-9999.0,
+    ) as ds:
+        ds.write((300.0 + xx9[:, :64] * 1.5 + yy9[:, :64]).astype(np.float32), 1)
+
+    p_w76_stac = synth_dir / "w76_stac_partial.json"
+    p_w76_stac.write_text(json.dumps({
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": "w76-partial-overlap",
+        "geometry": {"type": "Polygon", "coordinates": [[[-122.6, 37.4], [-121.9, 37.4], [-121.9, 38.1], [-122.6, 38.1], [-122.6, 37.4]]]},
+        "bbox": [-122.6, 37.4, -121.9, 38.1],
+        "properties": {"datetime": "2026-01-01T00:00:00Z"},
+        "links": [],
+        "assets": {
+            "left": {"href": str(p_w76_left), "type": "image/tiff; application=geotiff"},
+            "right": {"href": str(p_w76_right), "type": "image/tiff; application=geotiff"},
+        },
+    }))
+    out["w76_stac_partial"] = p_w76_stac
+
     return out
 
 
@@ -6604,6 +6647,16 @@ def main() -> int:
                 ("PARITY W75 NEG-DEM unscale+terrainrgb /preview 64x64.png", "GET", f"/cog/preview/64x64.png?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "png"),
                 ("PARITY W75 NEG-DEM unscale+terrarium /cog/map 64x64 f=png", "GET", f"/cog/map?url={q(s['w75_neg_dem_i16_scaled'])}&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&unscale=true&algorithm=terrarium&f=png", None, "png"),
                 ("PARITY W75 NEG-DEM unscale+terrainrgb tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w75_neg_dem_i16_scaled'])}&unscale=true&algorithm=terrainrgb", None, "geotiff"),
+                # --- Wave 76: Regressions for #653 (partial-valid multi-band nodata), #654 (GPU histogram inner-edge ties), #655 (aspect default buffer=3) ---
+                ("PARITY W76 #653 planar-sparse 3-band partial nodata tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w58_planar_sparse_nd'])}", None, "npy"),
+                ("PARITY W76 #653 planar-sparse 3-band partial nodata tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w58_planar_sparse_nd'])}", None, "geotiff"),
+                ("PARITY W76 #653 planar-sparse 3-band partial nodata /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w58_planar_sparse_nd'])}", None, "npy"),
+                ("PARITY W76 #653 planar-sparse 3-band partial nodata POST /feature .npy", "POST", f"/cog/feature/64x64.npy?url={q(s['w58_planar_sparse_nd'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "npy"),
+                ("PARITY W76 #653 STAC partial-overlap left+right tile .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w76_stac_partial'])}&assets=left&assets=right", None, "npy"),
+                ("PARITY W76 #653 STAC partial-overlap left+right tile .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w76_stac_partial'])}&assets=left&assets=right", None, "geotiff"),
+                ("PARITY W76 #654 GPU/CPU histogram exact inner-edge ties GET /statistics", "GET", f"/cog/statistics?url={q(s['w76_bin_edges_f32'])}&histogram_bins=10", None, "stats"),
+                ("PARITY W76 #654 GPU/CPU histogram exact inner-edge ties POST /statistics", "POST", f"/cog/statistics?url={q(s['w76_bin_edges_f32'])}&histogram_bins=10", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("BETTER W76 #655 aspect default buffer=3 matches explicit buffer=3 (cw 256, tt 422)", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.npy?url={q(merc)}&algorithm=aspect", None, "better_w76_aspect_default_buf"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -6823,6 +6876,18 @@ def main() -> int:
                                 and abs(float(bc["mean"]) - float(bt["mean"])) < 1e-2
                             )
                             detail = f"cw count={bc['count']} mean={bc['mean']:.4f} vs tt count={bt['count']} mean={bt['mean']:.4f}"
+                        else:
+                            ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
+                    elif kind == "better_w76_aspect_default_buf":
+                        if r_cw.status_code == 200 and r_tt.status_code == 422:
+                            r_exp = client.get(cw_base + path + "&buffer=3")
+                            if r_exp.status_code == 200:
+                                ac = np.load(io.BytesIO(r_cw.content))
+                                ae = np.load(io.BytesIO(r_exp.content))
+                                ok = ac.shape == (2, 256, 256) and np.array_equal(ac, ae)
+                                detail = f"cw=200 shape={ac.shape} eq_buf3={np.array_equal(ac, ae)} tt=422"
+                            else:
+                                ok, detail = False, f"cw_buf3={r_exp.status_code}"
                         else:
                             ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
                     elif kind == "better_cw404_tt200":
