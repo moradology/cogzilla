@@ -614,9 +614,7 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                 {
                     return Err(err);
                 }
-                return Err(EngineError::NotFound(format!(
-                    "No asset covers point ({lon}, {lat})"
-                )));
+                return Err(EngineError::NoContent);
             }
             let body = serde_json::json!({
                 "coordinates": [x, y],
