@@ -1962,6 +1962,44 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(i16_cat, 1)
     out["w69_neg_cat_i16"] = p_w69_negcat
 
+    # Wave 74: Multi-overview ([2, 4]) COGs with per-overview 1-bit internal masks (NewSubfileType=5)
+    yy74, xx74 = np.mgrid[0:512, 0:512]
+    tf_w74 = from_bounds(-122.6, 37.4, -121.9, 38.1, 512, 512)
+    mask74 = np.full((512, 512), 255, dtype=np.uint8)
+    mask74[280:380, 220:340] = 0  # large interior masked hole visible at both z10 and z8 overviews
+    mask74[:24, :] = 0            # northern collar masked
+    rgb74 = np.stack([
+        (30 + (xx74 * 0.42)).clip(0, 255).astype(np.uint8),
+        (220 - (yy74 * 0.35)).clip(0, 255).astype(np.uint8),
+        (40 + ((xx74 + yy74) * 0.2)).clip(0, 255).astype(np.uint8),
+    ])
+    p_w74_ycbcr = synth_dir / "w74_ovr_imask_ycbcr.tif"
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(
+            p_w74_ycbcr, "w", driver="GTiff", width=512, height=512, count=3, dtype="uint8",
+            crs="EPSG:4326", transform=tf_w74, tiled=True, blockxsize=128, blockysize=128,
+            compress="JPEG", photometric="YCBCR", jpeg_quality=92,
+        ) as ds:
+            ds.write(rgb74)
+            ds.write_mask(mask74)
+            ds.build_overviews([2, 4], rasterio.enums.Resampling.average)
+    out["w74_ovr_imask_ycbcr"] = p_w74_ycbcr
+
+    f32_74 = (1500.0 + xx74 * 3.0 + yy74 * 2.0).astype(np.float32)
+    p_w74_f32 = synth_dir / "w74_ovr_imask_f32_scaled.tif"
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(
+            p_w74_f32, "w", driver="GTiff", width=512, height=512, count=1, dtype="float32",
+            crs="EPSG:4326", transform=tf_w74, tiled=True, blockxsize=128, blockysize=128,
+            compress="deflate", predictor=3,
+        ) as ds:
+            ds.write(f32_74, 1)
+            ds.scales = (0.01,)
+            ds.offsets = (-10.0,)
+            ds.write_mask(mask74)
+            ds.build_overviews([2, 4], rasterio.enums.Resampling.average)
+    out["w74_ovr_imask_f32_scaled"] = p_w74_f32
+
     return out
 
 
@@ -6525,6 +6563,19 @@ def main() -> int:
                 ("BETTER W73 OGC /cog/map f=png algorithm=hillshade exact 64x64 (cw 64, tt 58)", "GET", f"/cog/map?url={q(merc)}&bbox=-122.45,37.65,-122.15,37.85&width=64&height=64&algorithm=hillshade&f=png", None, "better_w73_map_hillshade"),
                 ("PARITY W73 OGC /stac/map f=tif red+nir unscale=true", "GET", f"/stac/map?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&bbox=-122.45,37.55,-122.05,37.95&width=64&height=64&unscale=true&f=tif", None, "geotiff"),
                 ("PARITY W73 OGC /stac/map f=png 3857 expr+unscale+viridis", "GET", f"/stac/map?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&bbox=-13631071,4516059,-13586543,4572377&bbox-crs={qe('http://www.opengis.net/def/crs/EPSG/0/3857')}&crs={qe('http://www.opengis.net/def/crs/EPSG/0/3857')}&width=64&height=64&unscale=true&expression={qe('(b2-b1)/(b2+b1)')}&rescale=0,1&colormap_name=viridis&f=png", None, "png"),
+                # --- Wave 74: Multi-overview ([2, 4]) COGs with per-overview 1-bit internal masks (NewSubfileType=5) ---
+                ("PARITY W74 OVR+IMASK YCbCr JPEG base z10 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w74_ovr_imask_ycbcr'])}", None, "png"),
+                ("PARITY W74 OVR+IMASK YCbCr JPEG base z10 .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w74_ovr_imask_ycbcr'])}", None, "geotiff"),
+                ("PARITY W74 OVR+IMASK YCbCr JPEG ovr z8 .png", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.png?url={q(s['w74_ovr_imask_ycbcr'])}", None, "png"),
+                ("PARITY W74 OVR+IMASK YCbCr JPEG ovr z9 .png", "GET", f"/cog/tiles/WebMercatorQuad/9/82/198.png?url={q(s['w74_ovr_imask_ycbcr'])}", None, "png"),
+                ("PARITY W74 OVR+IMASK YCbCr JPEG /preview 64x64.png", "GET", f"/cog/preview/64x64.png?url={q(s['w74_ovr_imask_ycbcr'])}", None, "png"),
+                ("PARITY W74 OVR+IMASK YCbCr JPEG /bbox 64x64.png", "GET", f"/cog/bbox/-122.55,37.45,-121.95,38.08/64x64.png?url={q(s['w74_ovr_imask_ycbcr'])}", None, "png"),
+                ("PARITY W74 OVR+IMASK f32+unscale base z10 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true", None, "npy"),
+                ("PARITY W74 OVR+IMASK f32+unscale ovr z8 .npy", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.npy?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true", None, "npy"),
+                ("PARITY W74 OVR+IMASK f32+unscale ovr z8 viridis .png", "GET", f"/cog/tiles/WebMercatorQuad/8/41/99.png?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true&rescale=5,30&colormap_name=viridis", None, "png"),
+                ("PARITY W74 OVR+IMASK f32+unscale GET /statistics", "GET", f"/cog/statistics?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true", None, "stats"),
+                ("PARITY W74 OVR+IMASK f32+unscale POST /statistics", "POST", f"/cog/statistics?url={q(s['w74_ovr_imask_f32_scaled'])}&unscale=true", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.50, 37.50], [-122.00, 37.50], [-122.00, 38.05], [-122.50, 38.05], [-122.50, 37.50]]]}}, "post_stats"),
+                ("PARITY W74 OVR+IMASK f32 /cog/info.geojson", "GET", f"/cog/info.geojson?url={q(s['w74_ovr_imask_f32_scaled'])}", None, "info_geojson_w23"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
