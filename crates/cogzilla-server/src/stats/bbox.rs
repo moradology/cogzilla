@@ -3,6 +3,20 @@
 use super::*;
 use crate::multi_asset::render_mixed_grid_bbox;
 
+async fn fetch_blocks_for_mask_mode(
+    store: &cogzilla_io::CogStore,
+    cog: &cogzilla_io::OpenedCog,
+    ifd_idx: usize,
+    indices: &[Option<u32>],
+    return_mask: bool,
+) -> Result<Vec<Option<Arc<cogzilla_codec::DecodedTile>>>, cogzilla_io::IoError> {
+    if !return_mask && cogzilla_io::ifd_has_alpha_or_mask(&cog.index.ifds[ifd_idx]) {
+        store.get_blocks_unmasked(cog, ifd_idx, indices).await
+    } else {
+        store.get_blocks(cog, ifd_idx, indices).await
+    }
+}
+
 /// Full-precision `f64` data-array renderer for wide TIFF sample types (`Uint32`, `Int32`,
 /// `Uint64`, `Int64`, `Float64`) on unstyled `.npy` and `.tif` routes (`/cog/preview`,
 /// `/cog/bbox`, `/cog/feature`, `/cog/tiles`), bypassing `f32` quantization while leaving the
@@ -251,7 +265,7 @@ pub async fn render_exact_f64_array(
                         indices.push(Some(ifd.tile_index(tx, ty, 0) as u32));
                     }
                 }
-                let tiles = engine.store.get_blocks(cog, ifd_idx, &indices).await?;
+                let tiles = fetch_blocks_for_mask_mode(&engine.store, cog, ifd_idx, &indices, return_mask).await?;
                 for (bi, &b1) in bands_1based.iter().enumerate() {
                     let b0 = (b1 - 1) as usize;
                     let band_refs: Vec<Option<&cogzilla_codec::DecodedBand>> = tiles
@@ -287,7 +301,7 @@ pub async fn render_exact_f64_array(
                             indices.push(Some(ifd.tile_index(tx, ty, b0 as u16) as u32));
                         }
                     }
-                    let tiles = engine.store.get_blocks(cog, ifd_idx, &indices).await?;
+                    let tiles = fetch_blocks_for_mask_mode(&engine.store, cog, ifd_idx, &indices, return_mask).await?;
                     let band_refs: Vec<Option<&cogzilla_codec::DecodedBand>> = tiles
                         .iter()
                         .map(|t| t.as_ref().and_then(|dt| dt.bands.first()))
@@ -2046,7 +2060,8 @@ async fn render_bbox_core(
     // For single-COG RGBA / Gray+Alpha sources, capture the 1-based alpha band index and
     // include it in `planar_bands` when planar so intermediate translucency (1..254) can be
     // preserved on visual and `.npy` outputs.
-    let alpha_band_info: Option<(u16, f32)> = if cogs.len() == 1
+    let alpha_band_info: Option<(u16, f32)> = if return_mask
+        && cogs.len() == 1
         && fused_stats.is_none()
         && matches!(
             format,
@@ -2090,7 +2105,7 @@ async fn render_bbox_core(
                     }
                 }
             }
-            vec![engine.store.get_blocks(&cogs[0], ifd_idx, &indices).await?]
+            vec![fetch_blocks_for_mask_mode(&engine.store, &cogs[0], ifd_idx, &indices, return_mask).await?]
         } else {
             let mut indices = Vec::with_capacity(grid_len);
             for ty in ty0..=ty1 {
@@ -2098,7 +2113,7 @@ async fn render_bbox_core(
                     indices.push(Some(ifd.tile_index(tx, ty, 0) as u32));
                 }
             }
-            vec![engine.store.get_blocks(&cogs[0], ifd_idx, &indices).await?]
+            vec![fetch_blocks_for_mask_mode(&engine.store, &cogs[0], ifd_idx, &indices, return_mask).await?]
         }
     } else {
         let mut indices = Vec::with_capacity(grid_len);
@@ -2114,7 +2129,7 @@ async fn render_bbox_core(
             let cog = c.clone();
             let idx_ref = indices_arc.clone();
             js.spawn(async move {
-                let blocks = store.get_blocks(&cog, ifd_idx, &idx_ref).await?;
+                let blocks = fetch_blocks_for_mask_mode(&store, &cog, ifd_idx, &idx_ref, return_mask).await?;
                 Ok::<_, cogzilla_io::IoError>((slot, blocks))
             });
         }
@@ -2136,6 +2151,11 @@ async fn render_bbox_core(
     let ifd_tile_width = ifd.tile_width;
     let ifd_tile_height = ifd.tile_height;
     let num_cogs = cogs.len();
+    let gpu_ifd_idx = if !return_mask && cogzilla_io::ifd_has_alpha_or_mask(ifd) {
+        ifd_idx | 0x8000
+    } else {
+        ifd_idx
+    };
     let band_scale_offsets: Vec<(f32, f32)> = if num_cogs > 1 {
         cogs.iter()
             .map(|c| {
@@ -2543,7 +2563,7 @@ async fn render_bbox_core(
                     (num_cogs == 1)
                         .then(|| {
                             crate::gpu_backend::GpuBackend::multiband_key(
-                                primary_id, ifd_idx, b1s, srcs,
+                                primary_id, gpu_ifd_idx, b1s, srcs,
                             )
                         })
                         .flatten()
@@ -3159,7 +3179,7 @@ async fn render_bbox_core(
                 (num_cogs == 1)
                     .then(|| {
                         crate::gpu_backend::GpuBackend::multiband_key(
-                            primary_id, ifd_idx, b1s, srcs,
+                            primary_id, gpu_ifd_idx, b1s, srcs,
                         )
                     })
                     .flatten()

@@ -459,7 +459,8 @@ where
                         || pq.nodata.is_some()
                         || pq.custom_colormap_json.is_some()
                         || (!pq.return_mask
-                            && matches!(treq.format, OutputFormat::Npy | OutputFormat::NpyF64))
+                            && (matches!(treq.format, OutputFormat::Npy | OutputFormat::NpyF64)
+                                || cogs.iter().any(|c| cogzilla_io::ifd_has_alpha_or_mask(c.index.full_res()))))
                         || (pq.color_formula.is_some()
                             && !matches!(
                                 treq.bands,

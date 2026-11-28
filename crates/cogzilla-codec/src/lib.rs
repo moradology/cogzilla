@@ -464,6 +464,29 @@ pub fn decode_tile_rows_exact(
     nodata_f64: Option<f64>,
     actual_rows: u32,
 ) -> Result<DecodedTile, CodecError> {
+    decode_tile_rows_exact_impl(compressed, ifd, byte_order, nodata_f64, actual_rows, true)
+}
+
+/// Like [`decode_tile_rows_exact`], but preserves underlying color samples behind `alpha == 0`
+/// (and skips LERC internal validity-mask zeroing) for `return_mask=false` requests (#620).
+pub fn decode_tile_rows_exact_unmasked(
+    compressed: &[u8],
+    ifd: &IfdMeta,
+    byte_order: ByteOrder,
+    nodata_f64: Option<f64>,
+    actual_rows: u32,
+) -> Result<DecodedTile, CodecError> {
+    decode_tile_rows_exact_impl(compressed, ifd, byte_order, nodata_f64, actual_rows, false)
+}
+
+fn decode_tile_rows_exact_impl(
+    compressed: &[u8],
+    ifd: &IfdMeta,
+    byte_order: ByteOrder,
+    nodata_f64: Option<f64>,
+    actual_rows: u32,
+    apply_mask: bool,
+) -> Result<DecodedTile, CodecError> {
     let nodata: Option<f32> = nodata_f64.map(|v| v as f32);
     let tile_h = actual_rows.min(ifd.tile_height).max(1);
     let bands_in_tile = match ifd.planar_config {
@@ -521,7 +544,7 @@ pub fn decode_tile_rows_exact(
             recon_nodata,
             recon_nodata_f64,
         );
-        apply_rgba_alpha_if_present(&mut bands, ifd, deferred_nodata);
+        apply_rgba_alpha_if_present(&mut bands, ifd, deferred_nodata, apply_mask);
         return Ok(DecodedTile { bands });
     }
 
@@ -1040,9 +1063,9 @@ pub fn decode_tile_rows_exact(
             recon_nodata_f64,
         );
 
-        apply_rgba_alpha_if_present(&mut bands, ifd, deferred_nodata);
+        apply_rgba_alpha_if_present(&mut bands, ifd, deferred_nodata, apply_mask);
         let mut tile = DecodedTile { bands };
-        if let Some(ref m) = lerc_int_mask {
+        if apply_mask && let Some(ref m) = lerc_int_mask {
             apply_mask_to_tile(&mut tile, m);
         }
         Ok(tile)
@@ -1109,6 +1132,7 @@ fn apply_rgba_alpha_if_present(
     bands: &mut [DecodedBand],
     ifd: &IfdMeta,
     deferred_color_nodata: Option<f64>,
+    apply_alpha_mask: bool,
 ) {
     if ifd.planar_config != PlanarConfig::Chunky {
         return;
@@ -1182,6 +1206,10 @@ fn apply_rgba_alpha_if_present(
             let limit = b.data.len();
             mask_band_where(b, limit, |_, v| !nd_cmp.is_nan() && v == nd_cmp);
         }
+    }
+
+    if !apply_alpha_mask {
+        return;
     }
 
     // O(1) fast-path: if the alpha band has no nodata and min > 0, every pixel is opaque!

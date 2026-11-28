@@ -8017,3 +8017,184 @@ async fn multi_cog_and_mosaic_preserve_exact_float64_precision() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[tokio::test]
+async fn return_mask_false_preserves_raw_rgb_behind_alpha_zero() {
+    let tmp = std::env::temp_dir().join(format!("cogzilla_rmf_rgba_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // 16x16 4-band chunky Uint8 RGBA GeoTIFF (ExtraSamples = [2] unassociated alpha):
+    // top half: RGB=[200, 100, 50], alpha=0 (transparent collar with non-zero RGB payload)
+    // bottom half: RGB=[10, 20, 30], alpha=255 (opaque valid pixels)
+    let w = 16u32;
+    let h = 16u32;
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for _ in 0..w {
+            if y < 8 {
+                pixels.extend_from_slice(&[200, 100, 50, 0]);
+            } else {
+                pixels.extend_from_slice(&[10, 20, 30, 255]);
+            }
+        }
+    }
+
+    let bounds = [-122.5f64, 37.5, -122.0, 38.0];
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(b"II");
+    buf.extend_from_slice(&42u16.to_le_bytes());
+    buf.extend_from_slice(&8u32.to_le_bytes());
+
+    let n_entries = 14u16;
+    let ifd_end = 8 + 2 + (n_entries as u32) * 12 + 4;
+    let bps_off = ifd_end;
+    let scale_off = bps_off + 8;
+    let tiepoint_off = scale_off + 24;
+    let geokey_off = tiepoint_off + 48;
+    let data_off = geokey_off + 24;
+
+    buf.extend_from_slice(&n_entries.to_le_bytes());
+    let push_entry = |b: &mut Vec<u8>, tag: u16, ty: u16, count: u32, val: u32| {
+        b.extend_from_slice(&tag.to_le_bytes());
+        b.extend_from_slice(&ty.to_le_bytes());
+        b.extend_from_slice(&count.to_le_bytes());
+        b.extend_from_slice(&val.to_le_bytes());
+    };
+    push_entry(&mut buf, 256, 4, 1, w);
+    push_entry(&mut buf, 257, 4, 1, h);
+    push_entry(&mut buf, 258, 3, 4, bps_off); // BitsPerSample = [8, 8, 8, 8]
+    push_entry(&mut buf, 259, 3, 1, 1); // Compression = None
+    push_entry(&mut buf, 262, 3, 1, 2); // Photometric = RGB
+    push_entry(&mut buf, 273, 4, 1, data_off); // StripOffsets
+    push_entry(&mut buf, 277, 3, 1, 4); // SamplesPerPixel = 4
+    push_entry(&mut buf, 278, 4, 1, h); // RowsPerStrip
+    push_entry(&mut buf, 279, 4, 1, pixels.len() as u32); // StripByteCounts
+    push_entry(&mut buf, 284, 3, 1, 1); // PlanarConfig = Chunky
+    push_entry(&mut buf, 338, 3, 1, 2); // ExtraSamples = [2] (unassociated alpha)
+    push_entry(&mut buf, 33550, 12, 3, scale_off);
+    push_entry(&mut buf, 33922, 12, 6, tiepoint_off);
+    push_entry(&mut buf, 34735, 3, 12, geokey_off);
+    buf.extend_from_slice(&0u32.to_le_bytes());
+
+    for _ in 0..4 {
+        buf.extend_from_slice(&8u16.to_le_bytes());
+    }
+    let sx = (bounds[2] - bounds[0]) / w as f64;
+    let sy = (bounds[3] - bounds[1]) / h as f64;
+    for v in [sx, sy, 0.0f64] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [0.0f64, 0.0, 0.0, bounds[0], bounds[3], 0.0] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [1u16, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    buf.extend_from_slice(&pixels);
+    let path = tmp.join("rgba_collar.tif");
+    std::fs::write(&path, buf).unwrap();
+
+    let engine = Arc::new(TileEngine::new(64 * 1024 * 1024));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = serve_listener(engine, listener).await;
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let decode_png = |png: &[u8]| -> (u8, Vec<u8>) {
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let (mut pos, mut w, mut h, mut color_type) = (8usize, 0u32, 0u32, 0u8);
+        let mut idat = Vec::new();
+        while pos + 8 <= png.len() {
+            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+            let ctype = &png[pos + 4..pos + 8];
+            let data = &png[pos + 8..pos + 8 + len];
+            if ctype == b"IHDR" {
+                w = u32::from_be_bytes(data[0..4].try_into().unwrap());
+                h = u32::from_be_bytes(data[4..8].try_into().unwrap());
+                color_type = data[9];
+            } else if ctype == b"IDAT" {
+                idat.extend_from_slice(data);
+            }
+            pos += 12 + len;
+        }
+        let bpp = match color_type {
+            2 => 3usize,
+            6 => 4usize,
+            other => panic!("unexpected PNG color_type {other}"),
+        };
+        let stride = (w as usize) * bpp;
+        let mut raw = vec![0u8; (h as usize) * (1 + stride)];
+        let n = libdeflater::Decompressor::new()
+            .zlib_decompress(&idat, &mut raw)
+            .expect("zlib decompress PNG");
+        assert_eq!(n, raw.len());
+        let mut unfilt = vec![0u8; (h as usize) * stride];
+        for y in 0..h as usize {
+            let filter = raw[y * (1 + stride)];
+            let src = &raw[y * (1 + stride) + 1..(y + 1) * (1 + stride)];
+            for x in 0..stride {
+                let left = if x >= bpp { unfilt[y * stride + x - bpp] } else { 0 };
+                let up = if y > 0 { unfilt[(y - 1) * stride + x] } else { 0 };
+                let up_left = if x >= bpp && y > 0 { unfilt[(y - 1) * stride + x - bpp] } else { 0 };
+                let recon = match filter {
+                    0 => src[x],
+                    1 => src[x].wrapping_add(left),
+                    2 => src[x].wrapping_add(up),
+                    3 => src[x].wrapping_add(((left as u16 + up as u16) / 2) as u8),
+                    4 => {
+                        let p = left as i32 + up as i32 - up_left as i32;
+                        let pa = (p - left as i32).abs();
+                        let pb = (p - up as i32).abs();
+                        let pc = (p - up_left as i32).abs();
+                        let pr = if pa <= pb && pa <= pc { left } else if pb <= pc { up } else { up_left };
+                        src[x].wrapping_add(pr)
+                    }
+                    f => panic!("unsupported PNG filter {f}"),
+                };
+                unfilt[y * stride + x] = recon;
+            }
+        }
+        (color_type, unfilt)
+    };
+
+    // 1. Default (return_mask=true): top-half alpha=0 pixels are transparent.
+    let r_masked = client
+        .get(format!(
+            "{base}/cog/preview.png?url={}&resampling=nearest&return_mask=true",
+            path.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r_masked.status(), 200);
+    let (ct_m, buf_m) = decode_png(&r_masked.bytes().await.unwrap());
+    assert_eq!(ct_m, 6, "return_mask=true must emit RGBA PNG");
+    assert_eq!(&buf_m[0..4], &[0, 0, 0, 0], "return_mask=true must mask alpha=0 pixels");
+    let bot_off = (12 * 16) * 4;
+    assert_eq!(&buf_m[bot_off..bot_off + 4], &[10, 20, 30, 255]);
+
+    // 2. return_mask=false: strips alpha channel AND preserves underlying raw RGB [200, 100, 50] (#620).
+    let r_unmasked = client
+        .get(format!(
+            "{base}/cog/preview.png?url={}&resampling=nearest&return_mask=false",
+            path.display()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r_unmasked.status(), 200);
+    let (ct_u, buf_u) = decode_png(&r_unmasked.bytes().await.unwrap());
+    assert_eq!(ct_u, 2, "return_mask=false must emit RGB PNG");
+    assert_eq!(
+        &buf_u[0..3],
+        &[200, 100, 50],
+        "return_mask=false must preserve raw RGB behind alpha=0"
+    );
+    let bot_off_u = (12 * 16) * 3;
+    assert_eq!(&buf_u[bot_off_u..bot_off_u + 3], &[10, 20, 30]);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
