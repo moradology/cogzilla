@@ -5395,6 +5395,16 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
         "W68 ZARR v3 zstd codec /bbox .npy",
         "W68 ZARR v2 3D sel=time=nearest/pad/backfill /point",
         "W68 ZARR v2 3D sel= conflicting methods -> 400",
+        "W86 ZARR v3 sharding index_location=start + zstd + crc32c /bbox .npy",
+        "W86 ZARR v3 sharding index_location=start /point (valid & missing)",
+        "W86 ZARR v3 sharding index_location=start GET /statistics",
+        "W86 ZARR v3 sharding + transpose + blosc /bbox .npy",
+        "W86 ZARR v3 CF int16 unscale=false vs true /bbox .npy",
+        "W86 ZARR v3 CF int16 unscale=true /point",
+        "W86 ZARR v3 CF int16 unscale=true GET /statistics",
+        "W86 ZARR v3 CF int16 unscale=true tile viridis .png",
+        "W86 ZARR v3 3D fill_value=NaN sel=time=0 vs 1 /bbox .npy",
+        "W86 ZARR v3 3D fill_value=NaN sel=time=nearest/pad/backfill /point",
     ]
     if not any(wanted(lb) for lb in labels):
         return 0
@@ -5719,6 +5729,16 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
         "W68 ZARR v3 zstd codec /bbox .npy",
         "W68 ZARR v2 3D sel=time=nearest/pad/backfill /point",
         "W68 ZARR v2 3D sel= conflicting methods -> 400",
+        "W86 ZARR v3 sharding index_location=start + zstd + crc32c /bbox .npy",
+        "W86 ZARR v3 sharding index_location=start /point (valid & missing)",
+        "W86 ZARR v3 sharding index_location=start GET /statistics",
+        "W86 ZARR v3 sharding + transpose + blosc /bbox .npy",
+        "W86 ZARR v3 CF int16 unscale=false vs true /bbox .npy",
+        "W86 ZARR v3 CF int16 unscale=true /point",
+        "W86 ZARR v3 CF int16 unscale=true GET /statistics",
+        "W86 ZARR v3 CF int16 unscale=true tile viridis .png",
+        "W86 ZARR v3 3D fill_value=NaN sel=time=0 vs 1 /bbox .npy",
+        "W86 ZARR v3 3D fill_value=NaN sel=time=nearest/pad/backfill /point",
     ]
     if any(wanted(l) for l in w44_labels):
         def _crc32c_w44(data: bytes) -> int:
@@ -6185,6 +6205,330 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
                 pc = f"/zarr/point/-122.25,37.75?url={q(z_sel)}&variable=temp&sel={qe('time=nearest::14.0')}&sel={qe('time=pad::29.0')}"
                 rc = client.get(cw_base + pc)
                 rec(lb, rc.status_code == 400, f"status={rc.status_code}", pc)
+
+        # --- Wave 86: Zarr v3 sharding index_location="start" + zstd + crc32c, sharding+transpose+blosc,
+        #              Zarr v3 CF int16 unscale, and Zarr v3 3D fill_value="NaN" + sel= ---
+        def _zstd_enc_w86(raw_b: bytes) -> bytes:
+            import shutil as _shutil
+            zb = _shutil.which("zstd")
+            if zb:
+                return subprocess.run([zb, "-3", "-c"], input=raw_b, capture_output=True, check=True).stdout
+            n_ = len(raw_b)
+            bh_ = (1 | (0 << 1) | (n_ << 3)).to_bytes(3, "little")
+            return b"\x28\xb5\x2f\xfd\xa0" + n_.to_bytes(4, "little") + bh_ + raw_b
+
+        def _mk_z3_coords_w86(root: Path, extra_coords: list[tuple[str, np.ndarray, list[str]]] | None = None) -> None:
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "zarr.json").write_text(json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {}}))
+            items_c = [("lon", xs44, ["lon"]), ("lat", ys44, ["lat"])] + (extra_coords or [])
+            for nm_c, va_c, dims_c in items_c:
+                cd_ = root / nm_c
+                cd_.mkdir(exist_ok=True)
+                (cd_ / "zarr.json").write_text(json.dumps({
+                    "zarr_format": 3, "node_type": "array",
+                    "shape": [len(va_c)], "data_type": "float64",
+                    "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [len(va_c)]}},
+                    "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+                    "fill_value": 0.0,
+                    "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+                    "dimension_names": dims_c,
+                    "attributes": {"_ARRAY_DIMENSIONS": dims_c},
+                }))
+                (cd_ / "c").mkdir(exist_ok=True)
+                (cd_ / "c" / "0").write_bytes(np.ascontiguousarray(va_c).tobytes())
+
+        if any(wanted(l) for l in (
+            "W86 ZARR v3 sharding index_location=start + zstd + crc32c /bbox .npy",
+            "W86 ZARR v3 sharding index_location=start /point (valid & missing)",
+            "W86 ZARR v3 sharding index_location=start GET /statistics",
+        )):
+            z_sh_start = w30_dir / "w86_z3_shard_start_zstd.zarr"
+            _mk_z3_coords_w86(z_sh_start)
+            dd = z_sh_start / "data"
+            dd.mkdir(exist_ok=True)
+            (dd / "zarr.json").write_text(json.dumps({
+                "zarr_format": 3, "node_type": "array",
+                "shape": [64, 64], "data_type": "float32",
+                "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [64, 64]}},
+                "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+                "fill_value": -9999.0,
+                "codecs": [{
+                    "name": "sharding_indexed",
+                    "configuration": {
+                        "chunk_shape": [32, 32],
+                        "index_location": "start",
+                        "codecs": [
+                            {"name": "bytes", "configuration": {"endian": "little"}},
+                            {"name": "zstd", "configuration": {"level": 3}},
+                        ],
+                        "index_codecs": [
+                            {"name": "bytes", "configuration": {"endian": "little"}},
+                            {"name": "crc32c"},
+                        ],
+                    },
+                }],
+                "dimension_names": ["lat", "lon"],
+                "attributes": {"_ARRAY_DIMENSIONS": ["lat", "lon"]},
+            }))
+            # Index at byte 0..68 (4 * 16B entries + 4B crc32c); chunks follow starting at offset 68.
+            idx_size = 4 * 16 + 4
+            entries_s = []
+            payloads_s = bytearray()
+            for r_i in range(2):
+                for c_i in range(2):
+                    if (r_i, c_i) == (1, 1):
+                        entries_s.append((0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF))
+                    else:
+                        sub_s = np.ascontiguousarray(arr44[r_i * 32:(r_i + 1) * 32, c_i * 32:(c_i + 1) * 32])
+                        enc_s = _zstd_enc_w86(sub_s.tobytes())
+                        entries_s.append((idx_size + len(payloads_s), len(enc_s)))
+                        payloads_s.extend(enc_s)
+            idx_raw = b"".join(struct.pack("<QQ", o_, l_) for o_, l_ in entries_s)
+            shard_bytes = idx_raw + struct.pack("<I", _crc32c_w44(idx_raw)) + bytes(payloads_s)
+            (dd / "c" / "0").mkdir(parents=True, exist_ok=True)
+            (dd / "c" / "0" / "0").write_bytes(shard_bytes)
+
+            lb = "W86 ZARR v3 sharding index_location=start + zstd + crc32c /bbox .npy"
+            if wanted(lb):
+                p_bb = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_sh_start)}&variable=data"
+                rb = client.get(cw_base + p_bb)
+                if rb.status_code == 200:
+                    ab = np.load(io.BytesIO(rb.content))
+                    low = np.finfo(ab.dtype).min
+                    vm = ab[1] > low
+                    exp_vm = np.ones((64, 64), dtype=bool)
+                    exp_vm[32:, 32:] = False
+                    err = float(np.abs(ab[0][exp_vm] - arr44[exp_vm]).max())
+                    miss_masked = int((~vm[32:, 32:]).sum())
+                    rec(lb, err < 1e-4 and miss_masked == 1024 and bool((vm == exp_vm).all()), f"valid_err={err:.5f} missing_masked={miss_masked}/1024", p_bb)
+                    if gpu_base:
+                        rbg = client.get(gpu_base + p_bb)
+                        if rbg.status_code != 200:
+                            gpu_diffs.append({"label": lb, "detail": f"GPU HTTP {rbg.status_code}"})
+                        else:
+                            ok_g, det_g = compare_npy(rb.content, rbg.content, check_values=True)
+                            if not ok_g:
+                                gpu_diffs.append({"label": lb, "detail": det_g})
+                else:
+                    rec(lb, False, f"HTTP {rb.status_code} {rb.text[:80]!r}", p_bb)
+
+            lb = "W86 ZARR v3 sharding index_location=start /point (valid & missing)"
+            if wanted(lb):
+                pv = f"/zarr/point/-122.4,37.9?url={q(z_sh_start)}&variable=data"
+                pm = f"/zarr/point/-122.1,37.6?url={q(z_sh_start)}&variable=data"
+                rv, rm = client.get(cw_base + pv), client.get(cw_base + pm)
+                ok_v = rv.status_code == 200 and rv.json()["values"][0] is not None and abs(rv.json()["values"][0] - float(arr44[12, 12])) < 15.0
+                ok_m = rm.status_code == 200 and rm.json()["values"][0] is None
+                rec(lb, ok_v and ok_m, f"valid={rv.json().get('values') if rv.status_code==200 else rv.status_code} missing={rm.json().get('values') if rm.status_code==200 else rm.status_code}", pv)
+
+            lb = "W86 ZARR v3 sharding index_location=start GET /statistics"
+            if wanted(lb):
+                ps = f"/zarr/statistics?url={q(z_sh_start)}&variable=data"
+                rs = client.get(cw_base + ps)
+                if rs.status_code == 200:
+                    st_b1 = rs.json()["b1"]
+                    exp_vm = np.ones((64, 64), dtype=bool)
+                    exp_vm[32:, 32:] = False
+                    exp_mean = float(arr44[exp_vm].mean())
+                    ok_s = st_b1["valid_pixels"] == 3072 and st_b1["masked_pixels"] == 1024 and abs(st_b1["mean"] - exp_mean) < 0.05
+                    rec(lb, ok_s, f"valid={st_b1['valid_pixels']} masked={st_b1['masked_pixels']} mean={st_b1['mean']:.2f} (exp {exp_mean:.2f})", ps)
+                else:
+                    rec(lb, False, f"HTTP {rs.status_code} {rs.text[:80]!r}", ps)
+
+        lb = "W86 ZARR v3 sharding + transpose + blosc /bbox .npy"
+        if wanted(lb):
+            z_sh_tb = w30_dir / "w86_z3_shard_transpose_blosc.zarr"
+            _mk_z3_coords_w86(z_sh_tb)
+            dd = z_sh_tb / "data"
+            dd.mkdir(exist_ok=True)
+            (dd / "zarr.json").write_text(json.dumps({
+                "zarr_format": 3, "node_type": "array",
+                "shape": [64, 64], "data_type": "float32",
+                "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [64, 64]}},
+                "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+                "fill_value": -9999.0,
+                "codecs": [{
+                    "name": "sharding_indexed",
+                    "configuration": {
+                        "chunk_shape": [32, 32],
+                        "index_location": "end",
+                        "codecs": [
+                            {"name": "transpose", "configuration": {"order": [1, 0]}},
+                            {"name": "bytes", "configuration": {"endian": "little"}},
+                            {"name": "blosc", "configuration": {"cname": "zlib", "clevel": 5, "shuffle": "shuffle", "typesize": 4, "blocksize": 0}},
+                        ],
+                        "index_codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+                    },
+                }],
+                "dimension_names": ["lat", "lon"],
+                "attributes": {"_ARRAY_DIMENSIONS": ["lat", "lon"]},
+            }))
+            entries_tb, payloads_tb = [], bytearray()
+            for r_i in range(2):
+                for c_i in range(2):
+                    sub_t = np.ascontiguousarray(arr44[r_i * 32:(r_i + 1) * 32, c_i * 32:(c_i + 1) * 32].T)
+                    enc_t = _encode_blosc1(sub_t.tobytes(), 4, shuffle=1, use_zlib=True)
+                    entries_tb.append((len(payloads_tb), len(enc_t)))
+                    payloads_tb.extend(enc_t)
+            idx_tb = b"".join(struct.pack("<QQ", o_, l_) for o_, l_ in entries_tb)
+            (dd / "c" / "0").mkdir(parents=True, exist_ok=True)
+            (dd / "c" / "0" / "0").write_bytes(bytes(payloads_tb) + idx_tb)
+            p_bb = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_sh_tb)}&variable=data"
+            rb = client.get(cw_base + p_bb)
+            if rb.status_code == 200:
+                ab = np.load(io.BytesIO(rb.content))
+                err = float(np.abs(ab[0] - arr44).max())
+                rec(lb, err < 1e-4, f"max_err={err:.5f}", p_bb)
+                if gpu_base:
+                    rbg = client.get(gpu_base + p_bb)
+                    if rbg.status_code != 200:
+                        gpu_diffs.append({"label": lb, "detail": f"GPU HTTP {rbg.status_code}"})
+                    else:
+                        ok_g, det_g = compare_npy(rb.content, rbg.content, check_values=True)
+                        if not ok_g:
+                            gpu_diffs.append({"label": lb, "detail": det_g})
+            else:
+                rec(lb, False, f"HTTP {rb.status_code} {rb.text[:80]!r}", p_bb)
+
+        if any(wanted(l) for l in (
+            "W86 ZARR v3 CF int16 unscale=false vs true /bbox .npy",
+            "W86 ZARR v3 CF int16 unscale=true /point",
+            "W86 ZARR v3 CF int16 unscale=true GET /statistics",
+            "W86 ZARR v3 CF int16 unscale=true tile viridis .png",
+        )):
+            z_cf3 = w30_dir / "w86_z3_cf_i16.zarr"
+            _mk_z3_coords_w86(z_cf3)
+            i16_z3 = (-1000 + xx44.astype(np.int32) * 40 + yy44.astype(np.int32) * 20).astype(np.int16)
+            i16_z3[20:30, 20:30] = -32768
+            dd = z_cf3 / "temp"
+            dd.mkdir(exist_ok=True)
+            (dd / "zarr.json").write_text(json.dumps({
+                "zarr_format": 3, "node_type": "array",
+                "shape": [64, 64], "data_type": "int16",
+                "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [64, 64]}},
+                "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+                "fill_value": -32768,
+                "codecs": [
+                    {"name": "bytes", "configuration": {"endian": "little"}},
+                    {"name": "gzip", "configuration": {"level": 1}},
+                ],
+                "dimension_names": ["lat", "lon"],
+                "attributes": {"_ARRAY_DIMENSIONS": ["lat", "lon"], "scale_factor": 0.01, "add_offset": 273.15},
+            }))
+            (dd / "c" / "0").mkdir(parents=True, exist_ok=True)
+            (dd / "c" / "0" / "0").write_bytes(gzip.compress(np.ascontiguousarray(i16_z3).tobytes()))
+
+            lb = "W86 ZARR v3 CF int16 unscale=false vs true /bbox .npy"
+            if wanted(lb):
+                p_r = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_cf3)}&variable=temp&unscale=false"
+                p_u = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_cf3)}&variable=temp&unscale=true"
+                rr, ru = client.get(cw_base + p_r), client.get(cw_base + p_u)
+                if rr.status_code == 200 and ru.status_code == 200:
+                    ar, au = np.load(io.BytesIO(rr.content)), np.load(io.BytesIO(ru.content))
+                    vm = i16_z3 != -32768
+                    er = float(np.abs(ar[0][vm] - i16_z3[vm]).max())
+                    eu = float(np.abs(au[0][vm] - (i16_z3[vm] * 0.01 + 273.15)).max())
+                    rec(lb, er < 1e-4 and eu < 1e-3 and ar[1][25, 25] <= 0.0 and au[1][25, 25] <= 0.0, f"raw_err={er:.5f} unscaled_err={eu:.5f}", p_u)
+                else:
+                    rec(lb, False, f"HTTP raw={rr.status_code} unscaled={ru.status_code}", p_u)
+
+            lb = "W86 ZARR v3 CF int16 unscale=true /point"
+            if wanted(lb):
+                p_pt = f"/zarr/point/-122.4,37.9?url={q(z_cf3)}&variable=temp&unscale=true"
+                rp = client.get(cw_base + p_pt)
+                if rp.status_code == 200:
+                    v = rp.json()["values"][0]
+                    # row~12, col~12 -> i16 = -1000 + 12*40 + 12*20 = -280 -> 270.35
+                    ok_p = v is not None and 269.0 < v < 272.0
+                    rec(lb, ok_p, f"val={v} (exp ~270.35)", p_pt)
+                else:
+                    rec(lb, False, f"HTTP {rp.status_code} {rp.text[:80]!r}", p_pt)
+
+            lb = "W86 ZARR v3 CF int16 unscale=true GET /statistics"
+            if wanted(lb):
+                p_st = f"/zarr/statistics?url={q(z_cf3)}&variable=temp&unscale=true"
+                rs = client.get(cw_base + p_st)
+                if rs.status_code == 200:
+                    b1 = rs.json()["b1"]
+                    vm = i16_z3 != -32768
+                    exp_m = float((i16_z3[vm] * 0.01 + 273.15).mean())
+                    ok_s = b1["valid_pixels"] == int(vm.sum()) and abs(b1["mean"] - exp_m) < 0.05
+                    rec(lb, ok_s, f"valid={b1['valid_pixels']} mean={b1['mean']:.3f} (exp {exp_m:.3f})", p_st)
+                else:
+                    rec(lb, False, f"HTTP {rs.status_code} {rs.text[:80]!r}", p_st)
+
+            lb = "W86 ZARR v3 CF int16 unscale=true tile viridis .png"
+            if wanted(lb):
+                p_t = f"/zarr/tiles/WebMercatorQuad/10/164/396.png?url={q(z_cf3)}&variable=temp&unscale=true&rescale=260,310&colormap_name=viridis"
+                rt = client.get(cw_base + p_t)
+                if rt.status_code == 200:
+                    im = np.array(Image.open(io.BytesIO(rt.content)).convert("RGBA"))
+                    vm = im[..., 3] == 255
+                    rec(lb, im.shape == (256, 256, 4) and int(vm.sum()) > 10000 and float(im[vm, :3].std()) > 10.0, f"shape={im.shape} valid={int(vm.sum())}", p_t)
+                    if gpu_base:
+                        rtg = client.get(gpu_base + p_t)
+                        if rtg.status_code != 200:
+                            gpu_diffs.append({"label": lb, "detail": f"GPU HTTP {rtg.status_code}"})
+                        else:
+                            ok_g, det_g = compare_images(rt.content, rtg.content)
+                            if not ok_g:
+                                gpu_diffs.append({"label": lb, "detail": det_g})
+                else:
+                    rec(lb, False, f"HTTP {rt.status_code} {rt.text[:80]!r}", p_t)
+
+        if any(wanted(l) for l in (
+            "W86 ZARR v3 3D fill_value=NaN sel=time=0 vs 1 /bbox .npy",
+            "W86 ZARR v3 3D fill_value=NaN sel=time=nearest/pad/backfill /point",
+        )):
+            z_3d_nan = w30_dir / "w86_z3_3d_nan.zarr"
+            t_c = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+            _mk_z3_coords_w86(z_3d_nan, [("time", t_c, ["time"])])
+            d3_nan = np.stack([
+                np.full((64, 64), 100.0, dtype=np.float32),
+                np.full((64, 64), 200.0, dtype=np.float32),
+                np.full((64, 64), 300.0, dtype=np.float32),
+            ])
+            d3_nan[:, 20:30, 20:30] = np.nan
+            dd = z_3d_nan / "temp"
+            dd.mkdir(exist_ok=True)
+            (dd / "zarr.json").write_text(json.dumps({
+                "zarr_format": 3, "node_type": "array",
+                "shape": [3, 64, 64], "data_type": "float32",
+                "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [3, 64, 64]}},
+                "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+                "fill_value": "NaN",
+                "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+                "dimension_names": ["time", "lat", "lon"],
+                "attributes": {"_ARRAY_DIMENSIONS": ["time", "lat", "lon"]},
+            }))
+            (dd / "c" / "0" / "0").mkdir(parents=True, exist_ok=True)
+            (dd / "c" / "0" / "0" / "0").write_bytes(np.ascontiguousarray(d3_nan).tobytes())
+
+            lb = "W86 ZARR v3 3D fill_value=NaN sel=time=0 vs 1 /bbox .npy"
+            if wanted(lb):
+                p0 = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_3d_nan)}&variable=temp&sel={qe('time=10.0')}"
+                p1 = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_3d_nan)}&variable=temp&sel={qe('time=20.0')}"
+                r0, r1 = client.get(cw_base + p0), client.get(cw_base + p1)
+                if r0.status_code == 200 and r1.status_code == 200:
+                    a0, a1 = np.load(io.BytesIO(r0.content)), np.load(io.BytesIO(r1.content))
+                    low = np.finfo(a0.dtype).min
+                    ok_0 = float(a0[0][a0[1] > low].mean()) == 100.0 and a0[1][25, 25] <= low
+                    ok_1 = float(a1[0][a1[1] > low].mean()) == 200.0 and a1[1][25, 25] <= low
+                    rec(lb, ok_0 and ok_1, f"t0={float(a0[0][a0[1]>low].mean()):.1f} t1={float(a1[0][a1[1]>low].mean()):.1f} nan_masked={a0[1][25,25]<=low}", p0)
+                else:
+                    rec(lb, False, f"HTTP t0={r0.status_code} t1={r1.status_code}", p0)
+
+            lb = "W86 ZARR v3 3D fill_value=NaN sel=time=nearest/pad/backfill /point"
+            if wanted(lb):
+                checks_z3 = [("time=nearest::14.0", 100.0), ("time=nearest::16.0", 200.0), ("time=pad::29.0", 200.0), ("time=backfill::11.0", 200.0)]
+                got_v, ok_all = [], True
+                for es, ev in checks_z3:
+                    ps = f"/zarr/point/-122.4,37.9?url={q(z_3d_nan)}&variable=temp&sel={qe(es)}"
+                    rs = client.get(cw_base + ps)
+                    if rs.status_code != 200 or rs.json()["values"][0] is None or abs(rs.json()["values"][0] - ev) > 1e-4:
+                        ok_all = False
+                    got_v.append(rs.json()["values"][0] if rs.status_code == 200 else f"HTTP{rs.status_code}")
+                rec(lb, ok_all, f"vals={got_v} exp=[100,200,200,200]", ps)
 
     return ran
 
