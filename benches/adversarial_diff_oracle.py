@@ -6467,6 +6467,20 @@ def main() -> int:
                 ("PARITY W69 SOUTH-UP DEM resampling=bilinear .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w69_southup_dem'])}&resampling=bilinear", None, "npy"),
                 ("BETTER W69 SOUTH-UP DEM POST /statistics (cw exact, tt 500)", "POST", f"/cog/statistics?url={q(s['w69_southup_dem'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "better_w69_non_northup"),
                 ("PARITY W69 NEG-KEY discrete JSON colormap int16 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w69_neg_cat_i16'])}&colormap={qe(json.dumps({'-10':[255,0,0,255],'0':[0,255,0,255],'10':[0,0,255,255],'20':[255,255,0,128]}))}", None, "png"),
+                # --- Wave 70: Deep /statistics parameters (custom percentiles p=, category filter c= incl. negative, custom histogram_bins edge list, GET ?bbox=, algorithm=slope, STAC FC+unscale+p=) ---
+                ("PARITY W70 STATS GET custom percentiles p=10,25,50,75,90", "GET", f"/cog/statistics?url={q(s['w55_f32_imask'])}&p=10&p=25&p=50&p=75&p=90", None, "stats"),
+                ("PARITY W70 STATS POST custom percentiles p=5,50,95", "POST", f"/cog/statistics?url={q(s['w55_f32_imask'])}&p=5&p=50&p=95", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W70 STATS GET categorical=true + c=-10,10 neg filter", "GET", f"/cog/statistics?url={q(s['w69_neg_cat_i16'])}&categorical=true&c=-10&c=10", None, "stats"),
+                ("PARITY W70 STATS POST categorical=true + c=-10,20 neg filter", "POST", f"/cog/statistics?url={q(s['w69_neg_cat_i16'])}&categorical=true&c=-10&c=20", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W70 STATS GET custom histogram_bins edge list", "GET", f"/cog/statistics?url={q(s['w55_f32_imask'])}&histogram_bins=0,50,150,250,400", None, "stats"),
+                ("BETTER W70 STATS GET negative histogram_bins edges (cw 200, tt 422)", "GET", f"/cog/statistics?url={q(s['w55_f32_imask'])}&histogram_bins=-20,50,150,250,400", None, "better_w70_neg_bins"),
+                ("PARITY W70 STATS POST custom histogram_bins edge list", "POST", f"/cog/statistics?url={q(s['w55_f32_imask'])}&histogram_bins=0,100,200,350", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W70 STATS GET histogram_bins=5 + histogram_range", "GET", f"/cog/statistics?url={q(s['w55_f32_imask'])}&histogram_bins=5&histogram_range=50,300", None, "stats"),
+                ("PARITY W70 STATS GET ?bbox= subset filter", "GET", f"/cog/statistics?url={q(s['w55_f32_imask'])}&bbox=-122.45,37.55,-122.05,37.95", None, "stats"),
+                ("BETTER W70 STATS GET algorithm=slope full 128x128 (cw 16384, tt 14884)", "GET", f"/cog/statistics?url={q(s['w69_southup_dem'])}&algorithm=slope", None, "better_w70_slope_stats"),
+                ("BETTER W70 STATS POST algorithm=slope (cw 400, tt 500)", "POST", f"/cog/statistics?url={q(merc)}&algorithm=slope", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.65], [-122.15, 37.65], [-122.15, 37.85], [-122.45, 37.85], [-122.45, 37.65]]]}}, "better_cw4xx_tt500"),
+                ("PARITY W70 STAC GET /statistics custom p=10,90 + bins=5 + unscale", "GET", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&p=10&p=90&histogram_bins=5", None, "stats"),
+                ("PARITY W70 STAC POST /statistics FC 2-poly + unscale + p=25,75", "POST", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&p=25&p=75", {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"id": 1}, "geometry": {"type": "Polygon", "coordinates": [[[-122.50, 37.50], [-122.30, 37.50], [-122.30, 37.70], [-122.50, 37.70], [-122.50, 37.50]]]}}, {"type": "Feature", "properties": {"id": 2}, "geometry": {"type": "Polygon", "coordinates": [[[-122.20, 37.75], [-122.00, 37.75], [-122.00, 37.95], [-122.20, 37.95], [-122.20, 37.75]]]}}]}, "post_fc_stats_w23"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -6670,6 +6684,24 @@ def main() -> int:
                                 detail = f"cw=200 mean={mean_v:.2f} count={cnt:.1f} tt=500"
                             else:
                                 ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
+                    elif kind == "better_w70_neg_bins":
+                        if r_cw.status_code == 200 and r_tt.status_code == 422:
+                            b1 = r_cw.json()["b1"]
+                            counts, edges = b1["histogram"]
+                            ok = edges == [-20.0, 50.0, 150.0, 250.0, 400.0] and sum(counts) == b1["count"] and counts[0] > 0
+                            detail = f"cw=200 edges={edges} counts={counts} tt=422"
+                        else:
+                            ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
+                    elif kind == "better_w70_slope_stats":
+                        if r_cw.status_code == 200 and r_tt.status_code == 200:
+                            bc, bt = r_cw.json()["b1"], r_tt.json()["b1"]
+                            ok = (
+                                int(bc["count"]) == 16384 and int(bt["count"]) == 14884
+                                and abs(float(bc["mean"]) - float(bt["mean"])) < 1e-2
+                            )
+                            detail = f"cw count={bc['count']} mean={bc['mean']:.4f} vs tt count={bt['count']} mean={bt['mean']:.4f}"
+                        else:
+                            ok, detail = False, f"cw={r_cw.status_code} tt={r_tt.status_code}"
                     elif kind == "better_cw404_tt200":
                         ok = r_cw.status_code == 404 and r_tt.status_code == 200
                         detail = f"cw={r_cw.status_code} tt={r_tt.status_code}"

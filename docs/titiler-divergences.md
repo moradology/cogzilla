@@ -124,7 +124,7 @@ cogzilla keeps its choice. Against the area mean of the 10 m pixels (the ideal v
 
 ### 1.15 Additional Correctness & Robustness Improvements Verified by Differential Oracle
 
-Confirmed against stock TiTiler 2.4.1 (`rio-tiler 9.4.14`, `rasterio 1.5.2`) across 952 adversarial differential checks (0 CPU-vs-GPU diffs):
+Confirmed against stock TiTiler 2.4.1 (`rio-tiler 9.4.14`, `rasterio 1.5.2`) across 965 adversarial differential checks (0 CPU-vs-GPU diffs):
 - **Inverted `rescale` ranges (`rescale=max,min`, e.g. `rescale=200,0`):** `rio_tiler.utils.linear_rescale` calls `numpy.clip(image, imin, imax)` which collapses every pixel to `imax` whenever `imin > imax`, rendering a flat constant tile (solid `255` gray or flat `viridis(255)`). `cogzilla` performs proper linear inversion across `[imin, imax]` on both CPU and GPU.
 - **Extended GDAL `resampling=` modes (`min`, `max`, `med`, `q1`, `q3`, `sum`):** TiTiler 2.4.1 rejects these six modes with `422 literal_error`; `cogzilla` supports all 15 GDAL resampling modes across tiles and previews.
 - **`color_formula` on single-band grayscale and colormapped imagery:** TiTiler crashes with `500` when `color_formula` (e.g. `Gamma RGB 1.8`) is applied to a 1-band COG (both plain grayscale and with `colormap_name=viridis`); `cogzilla` applies the formula cleanly and returns a valid `200` PNG on both CPU and GPU.
@@ -140,6 +140,7 @@ Confirmed against stock TiTiler 2.4.1 (`rio-tiler 9.4.14`, `rasterio 1.5.2`) acr
 - **`colormap_type=linear` custom JSON stop interpolation:** When given a sparse custom JSON colormap (e.g. 3 RGB stops at `0`, `128`, `255`) with `colormap_type=linear`, `cogzilla` linearly interpolates across all valid pixels, whereas TiTiler treats the JSON dict as discrete (~0.6% coverage).
 - **`algorithm=aspect` and `algorithm=cast` `output_dtype`:** `cogzilla` provides `algorithm=aspect` (`0..360°` azimuth with seamless `buffer` & colormaps; TiTiler returns `422`), and honors `algorithm=cast` `algorithm_params={"output_dtype": "int16"}` (plus `dtype` alias) without modulo-256 wraparound, whereas TiTiler's `CastToInt.__call__` hardcodes `img.array.astype("uint8")` and silently ignores its own `output_dtype` field.
 - **`GET /cog/info?crs=...`, `GET /cog/bounds?crs=...`, and `GET /stac/{tms}/WMTSCapabilities.xml`:** `cogzilla` reprojects `/cog/info` and `/cog/bounds` into the requested `crs=` (TiTiler ignores `crs=` on `/cog/info` and lacks `/cog/bounds`), and serves valid OGC WMTS XML on `/stac/{tms}/WMTSCapabilities.xml` (TiTiler returns `404`).
+- **Negative custom `histogram_bins` edges & `/statistics?algorithm=slope`:** TiTiler 2.4.1 rejects negative custom bin edges (e.g. `histogram_bins=-20,50,150,250,400`) with `422 string_pattern_mismatch`, silently crops 3 px off every border on `GET /cog/statistics?algorithm=slope` (`122×122 = 14,884` vs full `128×128 = 16,384` pixels), and crashes with `500` (`Invalid shape ... for Coverage`) on `POST /cog/statistics?algorithm=slope`; `cogzilla` supports signed custom bin edges (`200` with exact counts), preserves the full raster extent on `GET /statistics?algorithm=slope`, and rejects unsupported `POST /statistics` algorithms cleanly with `400 Bad Request`.
 
 ## 2. Deliberate API & Error-Handling Divergences
 
