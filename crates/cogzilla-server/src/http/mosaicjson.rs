@@ -727,12 +727,12 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                 return Err(EngineError::BadRequest("invalid z/x/y tile coord".into()));
             };
             if z > 30 {
-                return Err(EngineError::BadRequest(format!("invalid zoom level z={z} (expected 0..=30)")));
+                return Err(EngineError::NotFound(format!("invalid zoom level z={z} (expected 0..=30)")));
             }
             let urls = if *tms == "WebMercatorQuad" {
                 let max_xy = 1u64 << (z as u32);
                 if (x as u64) >= max_xy || (y as u64) >= max_xy {
-                    return Err(EngineError::BadRequest(format!(
+                    return Err(EngineError::NotFound(format!(
                         "tile coordinate ({x}, {y}) out of range for WebMercatorQuad z={z} (expected x, y < {max_xy})"
                     )));
                 }
@@ -743,7 +743,7 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                     return Err(EngineError::NotFound(format!("unknown TileMatrixSet '{tms}'")));
                 };
                 let Some(tb) = tms_def.tile_bounds(z, x, y, pq.buffer, 256) else {
-                    return Err(EngineError::BadRequest(format!(
+                    return Err(EngineError::NotFound(format!(
                         "tile coordinate ({z}/{x}/{y}) out of range for TileMatrixSet '{tms}'"
                     )));
                 };
@@ -762,11 +762,11 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                 return Err(EngineError::BadRequest("invalid z/x/y tile coord".into()));
             };
             if z > 30 {
-                return Err(EngineError::BadRequest(format!("invalid zoom level z={z} (expected 0..=30)")));
+                return Err(EngineError::NotFound(format!("invalid zoom level z={z} (expected 0..=30)")));
             }
             let max_xy = 1u64 << (z as u32);
             if (x as u64) >= max_xy || (y as u64) >= max_xy {
-                return Err(EngineError::BadRequest(format!(
+                return Err(EngineError::NotFound(format!(
                     "tile coordinate ({x}, {y}) out of range for WebMercatorQuad z={z} (expected x, y < {max_xy})"
                 )));
             }
@@ -814,7 +814,7 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                         ));
                     };
                     if z > 30 {
-                        return Err(EngineError::BadRequest(format!(
+                        return Err(EngineError::NotFound(format!(
                             "invalid zoom level z={z} (expected 0..=30)"
                         )));
                     }
@@ -831,7 +831,7 @@ if method == Method::GET && segs.first() == Some(&"mosaicjson") {
                         let tb = tms_def
                             .tile_bounds(z, x, y, pq.buffer, query_ts)
                             .ok_or_else(|| {
-                                EngineError::BadRequest(format!(
+                                EngineError::NotFound(format!(
                                     "tile coordinate ({z}/{x}/{y}) out of range for TileMatrixSet '{tms}'"
                                 ))
                             })?;

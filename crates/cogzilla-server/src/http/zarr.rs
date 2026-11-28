@@ -1124,8 +1124,8 @@ async fn handle_tile(
     }
 
     let Some(tile_bounds) = tms.tile_bounds(z, x, y, 0.0, tile_size) else {
-        return Err(ZarrError::InvalidSelection {
-            detail: format!("tile {z}/{x}/{y} is out of matrix bounds for {tms_id}"),
+        return Err(ZarrError::NotFound {
+            key: format!("tile {z}/{x}/{y} is out of matrix bounds for {tms_id}"),
         });
     };
     let dst_crs = tms.crs_model().map_err(|e| ZarrError::UnsupportedCrs {

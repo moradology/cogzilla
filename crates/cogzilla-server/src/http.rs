@@ -2267,7 +2267,7 @@ fn build_tile_request_for_tms(
     let (cols, rows, target_epsg, base_tile_size) =
         if let Some(tms_def) = crate::tms::lookup_tms(tms_id) {
             let Some(m) = tms_def.matrix(tile.z) else {
-                return Err(EngineError::BadRequest(format!(
+                return Err(EngineError::NotFound(format!(
                     "zoom level z={} is not defined for tile matrix set '{}'",
                     tile.z, tms_id
                 )));
@@ -2275,7 +2275,7 @@ fn build_tile_request_for_tms(
             (m.matrix_width, m.matrix_height, tms_def.epsg, m.tile_width)
         } else {
             if tile.z > 30 {
-                return Err(EngineError::BadRequest(format!(
+                return Err(EngineError::NotFound(format!(
                     "zoom level z={} exceeds maximum supported zoom (30)",
                     tile.z
                 )));
@@ -2284,7 +2284,7 @@ fn build_tile_request_for_tms(
             (rows, rows, 3857u16, 256u32)
         };
     if (tile.x as u64) >= cols || (tile.y as u64) >= rows {
-        return Err(EngineError::BadRequest(format!(
+        return Err(EngineError::NotFound(format!(
             "tile coordinate ({}, {}) out of range for {tms_id} z={} (expected x < {cols}, y < {rows})",
             tile.x, tile.y, tile.z
         )));
