@@ -473,10 +473,13 @@ impl CogStore {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest cloud client");
-        let heavy_permits = std::thread::available_parallelism()
+        // Two-lane fairness: cap slow-lane heavy offloads (>512^2 crops, large stats, >2 MiB
+        // block decodes) to half of available cores so fast interactive map tiles always retain
+        // at least 50% CPU capacity under mixed-load bursts.
+        let cores = std::thread::available_parallelism()
             .map(|n| n.get())
-            .unwrap_or(4)
-            .max(1);
+            .unwrap_or(4);
+        let heavy_permits = (cores / 2).max(2).min(cores.max(1));
         let remote_cache_ttl = match std::env::var("COGZILLA_CACHE_TTL_SECS") {
             Ok(raw) if !raw.trim().is_empty() => match raw.trim().parse::<u64>() {
                 Ok(secs) => Duration::from_secs(secs),

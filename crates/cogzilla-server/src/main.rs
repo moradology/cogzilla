@@ -49,8 +49,21 @@ struct Args {
     print_config: bool,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(cores)
+        .max_blocking_threads(cores + 4)
+        .thread_keep_alive(std::time::Duration::from_secs(60))
+        .enable_all()
+        .build()
+        .expect("failed to build Tokio runtime");
+    rt.block_on(async_main());
+}
+
+async fn async_main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
