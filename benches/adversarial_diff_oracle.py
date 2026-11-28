@@ -2627,6 +2627,46 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         })
     out["w87_palette_u8"] = p_w87_pal
 
+    # Wave 88: 16-bit (uint16) embedded palette (ColorMap tag 320, 65,536 entries, indices > 255)
+    #          + 3-band signed int16 reduction algorithms (sum -> int64 < -32768, mean/median/std/var/min/max + unscale=true)
+    p_w88_pal16 = synth_dir / "w88_palette_u16.tif"
+    pal16_classes = np.array([100, 300, 1000, 5000, 30000, 60000], dtype=np.uint16)
+    pal16_w88 = pal16_classes[((xx9 // 16 + yy9 // 16) % len(pal16_classes))]
+    pal16_w88[75:95, 60:80] = 0
+    with rasterio.open(
+        p_w88_pal16, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=0,
+    ) as ds:
+        ds.write(pal16_w88, 1)
+        ds.write_colormap(1, {
+            0: (0, 0, 0, 0),
+            100: (220, 40, 40, 255),
+            300: (40, 180, 60, 255),
+            1000: (40, 90, 220, 255),
+            5000: (230, 200, 40, 255),
+            30000: (180, 50, 200, 255),
+            60000: (40, 200, 200, 255),
+        })
+    out["w88_palette_u16"] = p_w88_pal16
+
+    p_w88_i16_3b = synth_dir / "w88_i16_3b_scaled.tif"
+    i16_3b = np.stack([
+        (-20000 + xx9.astype(np.int32) * 120).astype(np.int16),
+        (-18000 + yy9.astype(np.int32) * 140).astype(np.int16),
+        (-15000 + (xx9.astype(np.int32) + yy9.astype(np.int32)) * 90).astype(np.int16),
+    ])
+    i16_3b[:, 75:95, 60:80] = -32768
+    with rasterio.open(
+        p_w88_i16_3b, "w", driver="GTiff", width=128, height=128, count=3, dtype="int16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", nodata=-32768,
+    ) as ds:
+        ds.write(i16_3b)
+        ds.scales = (0.1, 0.1, 0.1)
+        ds.offsets = (-10.0, -10.0, -10.0)
+    out["w88_i16_3b_scaled"] = p_w88_i16_3b
+
     return out
 
 
@@ -7822,6 +7862,21 @@ def main() -> int:
                 ("PARITY W87 PALETTE-U8 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w87_palette_u8'])}", None, "png"),
                 ("PARITY W87 PALETTE-U8 /preview 64 .png", "GET", f"/cog/preview.png?url={q(s['w87_palette_u8'])}&max_size=64", None, "png"),
                 ("PARITY W87 PALETTE-U8 GET /statistics categorical=true", "GET", f"/cog/statistics?url={q(s['w87_palette_u8'])}&categorical=true", None, "stats_w23"),
+                # --- Wave 88: 16-bit (uint16) embedded palette (>255 indices) & 3-band signed int16 reduction algorithms ---
+                ("PARITY W88 PALETTE-U16 default tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w88_palette_u16'])}", None, "png"),
+                ("PARITY W88 PALETTE-U16 colormap_name=viridis override .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w88_palette_u16'])}&rescale=0,60000&colormap_name=viridis", None, "png"),
+                ("PARITY W88 PALETTE-U16 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w88_palette_u16'])}", None, "png"),
+                ("PARITY W88 PALETTE-U16 /preview 64 .png", "GET", f"/cog/preview.png?url={q(s['w88_palette_u16'])}&max_size=64", None, "png"),
+                ("PARITY W88 PALETTE-U16 GET /statistics categorical=true", "GET", f"/cog/statistics?url={q(s['w88_palette_u16'])}&categorical=true", None, "stats_w23"),
+                ("PARITY W88 ALG 3-band i16 sum (< -32768 -> i64) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=sum", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 mean unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=mean&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 median unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=median&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 std unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=std&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 var unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=var&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 min unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=min&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 max unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=max&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 mean unscale=true /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w88_i16_3b_scaled'])}&algorithm=mean&unscale=true", None, "npy"),
+                ("PARITY W88 ALG 3-band i16 std unscale=true viridis .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w88_i16_3b_scaled'])}&algorithm=std&unscale=true&rescale=0,1000&colormap_name=viridis", None, "png"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
