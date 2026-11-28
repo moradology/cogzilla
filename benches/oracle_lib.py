@@ -189,7 +189,7 @@ def geotiff_array(body: bytes) -> tuple[bytes, str]:
         with MemoryFile(body) as memory, memory.open() as ds:
             said = (
                 f"{ds.dtypes[0]} x{ds.count} {[c.name for c in ds.colorinterp]} "
-                f"epsg {ds.crs.to_epsg() if ds.crs else None} {[round(v, 6) for v in ds.bounds]}"
+                f"epsg {ds.crs.to_epsg() if ds.crs else None} {[round(v, 3 if abs(v) > 1000 else 6) for v in ds.bounds]}"
             )
             out = io.BytesIO()
             np.save(out, ds.read())
