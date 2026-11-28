@@ -200,7 +200,7 @@ pub fn f32_npy_shape(npy: &[u8]) -> Option<(Vec<usize>, usize)> {
 /// as rio-tiler's `ImageData.mask` is. The values under the mask are kept as they are: what
 /// the renderer put there is the raster's own fill.
 pub fn retype_f32_npy(npy: &[u8], kind: SampleType, mask: bool) -> Option<Bytes> {
-    retype_f32_npy_with(npy, kind, mask, |v| v)
+    retype_f32_npy_with(npy, kind, mask, None, |v| v)
 }
 
 /// Whether a floating-point validity mask sample represents a valid pixel.
@@ -217,23 +217,26 @@ pub fn is_valid_mask_sample(m: f64) -> bool {
 }
 
 /// Normalize a sample `v` against its pixel's optional mask sample before retyping:
-/// a `NaN` on a pixel the mask marks valid becomes `0.0` (matching rio-tiler's `.npy`/GeoTIFF
-/// retype, where only masked-out pixels stay absent).
+/// a `NaN` on a pixel the mask marks valid (e.g. an asymmetric per-band nodata pixel in a
+/// multi-band raster) becomes `nodata_fill.unwrap_or(0.0)` so the raster's own nodata
+/// sentinel (such as `-9999.0`) is preserved instead of silently turning into `0.0` (#636).
 #[inline(always)]
-pub fn retype_value_with_mask(v: f64, mask_sample: Option<f64>) -> f64 {
+pub fn retype_value_with_mask(v: f64, mask_sample: Option<f64>, nodata_fill: Option<f64>) -> f64 {
     if v.is_nan() && mask_sample.is_some_and(is_valid_mask_sample) {
-        0.0
+        nodata_fill.unwrap_or(0.0)
     } else {
         v
     }
 }
 
 /// [`retype_f32_npy`], each value (not the mask) passed through `prepare` before it is cast:
-/// how an algorithm rounds or wraps it into `kind`.
+/// how an algorithm rounds or wraps it into `kind`. `nodata_fill` is substituted for per-band
+/// `NaN`s on pixels whose dataset mask is valid (#636).
 pub fn retype_f32_npy_with(
     npy: &[u8],
     kind: SampleType,
     mask: bool,
+    nodata_fill: Option<f64>,
     prepare: impl Fn(f64) -> f64,
 ) -> Option<Bytes> {
     let (shape, start) = f32_npy_shape(npy)?;
@@ -259,7 +262,7 @@ pub fn retype_f32_npy_with(
         } else {
             None
         };
-        prepare(retype_value_with_mask(x, mask_sample))
+        prepare(retype_value_with_mask(x, mask_sample, nodata_fill))
     });
     if kind == SampleType::Uint8
         && let Some(ms) = mask_slice
@@ -489,5 +492,33 @@ mod tests {
         let u8_body = npy_body(&u8_npy);
         assert_eq!(&u8_body[0..4], &[0u8, 10, 20, 30]);
         assert_eq!(&u8_body[4..8], &[0u8, 64, 128, 255]);
+    }
+
+    #[test]
+    fn retype_f32_npy_preserves_file_nodata_sentinel_on_partially_valid_pixels() {
+        // 3-band, 1x2 CHW float32:
+        // pixel 0: b1=NaN, b2=NaN, b3=154.2 (partially valid -> mask valid, b1/b2 -> -9999.0)
+        // pixel 1: b1=NaN, b2=NaN, b3=NaN   (fully masked -> mask MIN, bands stay NaN)
+        let raw_vals: [f32; 6] = [f32::NAN, f32::NAN, f32::NAN, f32::NAN, 154.2, f32::NAN];
+        let mut raw_bytes = Vec::with_capacity(24);
+        for v in raw_vals {
+            raw_bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let wrapped = wrap_raw_f32_as_npy_with_mask(Bytes::from(raw_bytes), 3, 1, 2, true);
+        let retyped = retype_f32_npy_with(&wrapped, SampleType::Float32, true, Some(-9999.0), |v| v)
+            .expect("retype f32 with nodata");
+        let body = npy_body(&retyped);
+        let out: Vec<f32> = body
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(out[0], -9999.0);
+        assert!(out[1].is_nan());
+        assert_eq!(out[2], -9999.0);
+        assert!(out[3].is_nan());
+        assert!((out[4] - 154.2).abs() < 1e-4);
+        assert!(out[5].is_nan());
+        assert_eq!(out[6], f32::MAX);
+        assert_eq!(out[7], f32::MIN);
     }
 }
