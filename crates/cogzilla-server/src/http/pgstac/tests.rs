@@ -1472,7 +1472,7 @@ fn algorithms_on_a_mosaic_s_bands() {
     // Terrarium of 100 m: 32868 = 128 * 256 + 100.
     assert_eq!(BandAlgorithm::Terrarium.apply(vec![vec![100.0]], true, 1, (1.0, 1.0)).unwrap().0, [vec![128.0], vec![100.0], vec![0.0]]);
     // `aspect` is parsed and applied (matching `cogzilla-kernel::DemAlgorithm::Aspect`).
-    assert_eq!(BandAlgorithm::parse("aspect", None), Ok(Some(BandAlgorithm::Aspect { buffer: 0, z: 1.0 })));
+    assert_eq!(BandAlgorithm::parse("aspect", None), Ok(Some(BandAlgorithm::Aspect { buffer: 3, z: 1.0 })));
     assert!(BandAlgorithm::parse("aspect", Some(r#"{"buffer":100}"#)).is_err());
     // Elevation decreasing Eastward (left=20, mid=10, right=0) -> aspect = 90° (East).
     let (east, east_names) = BandAlgorithm::Aspect { buffer: 0, z: 1.0 }

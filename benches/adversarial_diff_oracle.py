@@ -6141,7 +6141,7 @@ def main() -> int:
                 ("PARITY W40 UNSIZED POST /cog/feature.png max_size=128", "POST", f"/cog/feature.png?url={q(s['w40_rect_dem'])}&max_size=128&rescale=200,1500&colormap_name=viridis", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.4, 37.55], [-121.6, 37.55], [-122.0, 37.95], [-122.4, 37.55]]]}}, "png"),
                 ("PARITY W40 UNSIZED POST /cog/feature.npy w=48&h=48", "POST", f"/cog/feature.npy?url={q(s['w40_rect_dem'])}&width=48&height=48", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.4, 37.55], [-121.6, 37.55], [-122.0, 37.95], [-122.4, 37.55]]]}}, "npy"),
                 ("BETTER W40 ALG aspect .npy (cw 200 0..360 deg, tt 422)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w40_rect_dem'])}&algorithm=aspect", None, "better_aspect_w40"),
-                ("BETTER W40 ALG aspect&buffer=3 .npy (cw 262x262, tt 422)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w40_rect_dem'])}&algorithm=aspect&buffer=3", None, "better_aspect_w40"),
+                ("BETTER W40 ALG aspect&buffer=3 .npy (cw 256x256, tt 422)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w40_rect_dem'])}&algorithm=aspect&buffer=3", None, "better_aspect_w40"),
                 ("BETTER W40 ALG aspect twilight .png (cw 200, tt 422)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w40_rect_dem'])}&algorithm=aspect&rescale=0,360&colormap_name=twilight", None, "better_aspect_w40"),
                 # --- Wave 41: All 7 multi-band reduction algorithms (min/max/mean/std/var/median/sum) + u16 sum>65535 promotion ---
                 ("PARITY W41 ALG 4-band f32 min .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w41_f32_4b'])}&algorithm=min", None, "npy"),
@@ -7092,7 +7092,7 @@ def main() -> int:
                             detail = f"cw=200 shape={imc.shape} valid={int(vm.sum())} std={cstd:.1f} tt=422"
                         else:
                             ac = np.load(io.BytesIO(r_cw.content))
-                            exp_dim = 262 if "buffer=3" in path else 256
+                            exp_dim = 256
                             vm = ac[1] > 0.0
                             vmin = float(ac[0][vm].min()) if vm.any() else -1.0
                             vmax = float(ac[0][vm].max()) if vm.any() else -1.0

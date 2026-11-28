@@ -144,7 +144,7 @@ pub struct AlgorithmDef {
     pub out_min: Option<f64>,
     pub out_max: Option<f64>,
     /// Default edge-buffer crop subtracted from `?buffer=` on DEM stencil algorithms (`Some(3.0)`
-    /// for `hillshade`/`slope`, `Some(0.0)` for `aspect`, `None` for non-stencil algorithms).
+    /// for `hillshade`/`slope`/`aspect`, `None` for non-stencil algorithms).
     pub dem_margin: Option<f32>,
     pub kind: AlgorithmKind,
     pub params: &'static [ParamDef],
@@ -290,7 +290,7 @@ const ASPECT_PARAMS: &[ParamDef] = &[
         title: "Buffer",
         description: Some("Buffer size for edge effects"),
         kind: ParamKind::Int,
-        default: ParamDefault::Int(0),
+        default: ParamDefault::Int(3),
         min: 0.0,
         max: 99.0,
     },
@@ -432,7 +432,7 @@ pub const ALGORITHMS: &[AlgorithmDef] = &[
         out_dtype: OutputDtype::AspectNative,
         out_min: Some(0.0),
         out_max: Some(360.0),
-        dem_margin: Some(0.0),
+        dem_margin: Some(3.0),
         kind: AlgorithmKind::Dem,
         params: ASPECT_PARAMS,
     },
@@ -795,7 +795,7 @@ mod tests {
         let aspect = get_algorithm_json("aspect").unwrap();
         assert_eq!(aspect["outputs"]["dtype"], "float32");
         assert_eq!(aspect["outputs"]["max"], json!([360.0]));
-        assert_eq!(aspect["parameters"]["buffer"]["default"], 0);
+        assert_eq!(aspect["parameters"]["buffer"]["default"], 3);
         let contours = get_algorithm_json("contours").unwrap();
         assert_eq!(contours["outputs"]["nbands"], 3);
         assert_eq!(contours["parameters"]["increment"]["type"], "integer");

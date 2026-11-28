@@ -1112,10 +1112,10 @@ pub(super) fn parse_query(q: Option<&str>) -> ParsedQuery {
     if pq.colormap_name_set {
         pq.custom_colormap_json = None;
     }
-    // TiTiler's HillShade and Slope (default buffer 3) crop `algorithm_params.buffer` back out
-    // of the buffered input tile; since cogzilla's stencil already fetches its own neighbour
-    // halo seamlessly, subtract that crop from `pq.buffer` so `?algorithm=hillshade&buffer=3`
-    // and `?algorithm=slope&buffer=3` are 256×256, as there. Aspect (cogzilla's own) crops none.
+    // DEM stencil algorithms (`hillshade`, `slope`, `aspect`, default buffer 3) crop
+    // `algorithm_params.buffer` back out of the buffered input tile; since cogzilla's stencil
+    // already fetches its own neighbour halo seamlessly, subtract that crop from `pq.buffer`
+    // so `?algorithm={hillshade,slope,aspect}&buffer=3` all return 256×256 consistently (#623).
     if pq.buffer > 0.0
         && let Some(default_crop) = pq
             .algorithm
@@ -1388,5 +1388,22 @@ mod tests {
             "algorithm=cast&algorithm_params=%7B%22output_dtype%22%3A%22int16%22%2C%22dtype%22%3A%22uint8%22%7D",
         ));
         assert_eq!(pq_both.cast_dtype.as_deref(), Some("int16"));
+    }
+
+    #[test]
+    fn terrain_stencil_algorithms_share_consistent_buffer_crop() {
+        for alg in ["hillshade", "slope", "aspect"] {
+            let pq3 = parse_query(Some(&format!("algorithm={alg}&buffer=3")));
+            assert_eq!(pq3.buffer, 0.0, "{alg} with buffer=3 should crop to 0.0 (256x256)");
+            let pq6 = parse_query(Some(&format!("algorithm={alg}&buffer=6")));
+            assert_eq!(pq6.buffer, 3.0, "{alg} with buffer=6 should crop default 3 to 3.0");
+            let pq_zero_crop = parse_query(Some(&format!(
+                "algorithm={alg}&buffer=3&algorithm_params=%7B%22buffer%22%3A0%7D"
+            )));
+            assert_eq!(
+                pq_zero_crop.buffer, 3.0,
+                "{alg} with algorithm_params.buffer=0 should preserve full buffer=3"
+            );
+        }
     }
 }
