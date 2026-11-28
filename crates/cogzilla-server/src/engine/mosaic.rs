@@ -462,12 +462,100 @@ impl TileEngine {
             return Ok((bytes, Vec::new()));
         }
 
-        // RawF32 / RawF64 / Npy / NpyF64 mosaic path: composite real float band-major planes (CHW)
+        // Exact f64 mosaic path (`RawF64` / `NpyF64`): composite real `f64` band-major planes
+        // (CHW) directly without `f32` truncation, preserving full 53-bit precision (#619).
+        if matches!(req.format, OutputFormat::RawF64 | OutputFormat::NpyF64) {
+            let mut canvas = vec![f64::NAN; f32_bands * total_pixels];
+            let mut filled = 0usize;
+            let mut scene_req = req.clone();
+            scene_req.format = OutputFormat::RawF64;
+
+            let mut opened_any = false;
+            let mut last_open_err: Option<EngineError> = None;
+            let mut failed_assets: Vec<String> = Vec::new();
+            let mut scene_i = 0usize;
+            let mut reading = self.mosaic_scenes_in_order(scenes, &scene_req, false, ahead);
+            while filled < total_pixels {
+                let scene_urls = &scenes[scene_i.min(scenes.len() - 1)];
+                scene_i += 1;
+                let Some(src) = reading.next().await else {
+                    break;
+                };
+                let src = match src {
+                    Ok(src) => {
+                        opened_any = true;
+                        src
+                    }
+                    Err(SceneFailure::Unopened(e)) if skip_unopened && !refused(&e) => {
+                        failed_assets.extend(scene_urls.iter().map(|u| cogzilla_io::redact_http_url(u)));
+                        last_open_err = Some(e);
+                        continue;
+                    }
+                    Err(SceneFailure::Unread(EngineError::Io(e))) if skip_unopened && !e.is_fatal() => {
+                        failed_assets.extend(scene_urls.iter().map(|u| cogzilla_io::redact_http_url(u)));
+                        last_open_err = Some(asset_fetch_error(&scene_urls[0], e));
+                        continue;
+                    }
+                    Err(failure) => return Err(failure.into_error()),
+                };
+                if src.len() != f32_bands * total_pixels * 8 {
+                    continue;
+                }
+                for i in 0..total_pixels {
+                    if !canvas[i].is_nan() {
+                        continue;
+                    }
+                    let mut any_valid = false;
+                    for b in 0..f32_bands {
+                        let byte_off = (b * total_pixels + i) * 8;
+                        let v = f64::from_le_bytes(src[byte_off..byte_off + 8].try_into().unwrap());
+                        if !v.is_nan() {
+                            any_valid = true;
+                            break;
+                        }
+                    }
+                    if any_valid {
+                        for b in 0..f32_bands {
+                            let byte_off = (b * total_pixels + i) * 8;
+                            canvas[b * total_pixels + i] =
+                                f64::from_le_bytes(src[byte_off..byte_off + 8].try_into().unwrap());
+                        }
+                        filled += 1;
+                    }
+                }
+            }
+
+            if filled == 0
+                && !opened_any
+                && let Some(err) = last_open_err
+            {
+                return Err(err);
+            }
+            if req.format == OutputFormat::NpyF64 {
+                let ts = req.tile_size as usize;
+                return Ok((
+                    cogzilla_kernel::encode_npy_typed_f64(
+                        &canvas,
+                        f32_bands,
+                        ts,
+                        ts,
+                        cogzilla_raster::SampleType::Float64,
+                        None,
+                        true,
+                    ),
+                    failed_assets,
+                ));
+            }
+            let mut out = bytes::BytesMut::with_capacity(f32_bands * total_pixels * 8);
+            for v in canvas {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            return Ok((out.freeze(), failed_assets));
+        }
+
+        // RawF32 / Npy mosaic path: composite real float band-major planes (CHW)
         // with NaN transparency and early exit once every pixel has valid data.
-        if matches!(
-            req.format,
-            OutputFormat::RawF32 | OutputFormat::RawF64 | OutputFormat::Npy | OutputFormat::NpyF64
-        ) {
+        if matches!(req.format, OutputFormat::RawF32 | OutputFormat::Npy) {
             let mut canvas = vec![f32::NAN; f32_bands * total_pixels];
             let mut filled = 0usize;
             let mut scene_req = req.clone();

@@ -2923,12 +2923,12 @@ async fn render_mosaic_tile_styled(
                     | BandRequest::CustomExprRgb { .. }
                     | BandRequest::Terrain { .. }
             ))
-        || matches!(
+        || (matches!(
             treq.bands,
             BandRequest::CustomExprRgb { .. }
                 | BandRequest::CustomExprMulti { .. }
                 | BandRequest::MultiBand { .. }
-        )
+        ) && !matches!(treq.format, OutputFormat::RawF64 | OutputFormat::NpyF64))
         || (treq.tile_size != 256 && treq.tile_size != 512);
     if !needs_bbox_mosaic
         && !pq.colormap_explicit
@@ -5666,12 +5666,12 @@ where
                                             | BandRequest::Terrain { .. }
                                     ))
                                 || (treq.tile_size != 256 && treq.tile_size != 512)
-                                || matches!(
+                                || (matches!(
             treq.bands,
             BandRequest::CustomExprRgb { .. }
                 | BandRequest::CustomExprMulti { .. }
                 | BandRequest::MultiBand { .. }
-        )
+        ) && !matches!(treq.format, OutputFormat::RawF64 | OutputFormat::NpyF64))
                                 || has_embedded_palette(&pq, &cogs[0], &treq.bands)
                                 || !crate::engine::cogs_share_base_grid(&cogs);
                             if needs_general_path {

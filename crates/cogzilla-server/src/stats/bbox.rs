@@ -995,14 +995,14 @@ async fn render_bbox_core(
         }
     }
     // Exact f64 data path for wide sample types (`Uint32`, `Int32`, `Uint64`, `Int64`, `Float64`)
-    // on unstyled `.npy` / `.tif` requests: bypasses `f32` quantization while leaving the hot
-    // 8-bit / f32 render path completely untouched.
-    if cogs.len() == 1
+    // on unstyled `.npy` / `.tif` requests (single-COG and multi-COG stacks): bypasses `f32`
+    // quantization while leaving the hot 8-bit / f32 render path completely untouched (#619).
+    if !cogs.is_empty()
         && !unscale
         && color_formula.is_none()
         && custom_lut.is_none()
         && matches!(resample, ResampleMode::Nearest | ResampleMode::Bilinear)
-        && cogs[0].index.full_res().sample_type.needs_f64()
+        && cogs.iter().any(|c| c.index.full_res().sample_type.needs_f64())
         && matches!(format, OutputFormat::RawF64 | OutputFormat::NpyF64)
     {
         let bands_1based: Option<Vec<u16>> = match bands {
@@ -1012,27 +1012,90 @@ async fn render_bbox_core(
             _ => None,
         };
         if let Some(b1) = bands_1based {
-            let kind = cogs[0].index.full_res().sample_type;
-            return render_exact_f64_array(
-                engine,
-                &cogs[0],
-                bbox,
-                dst_crs,
-                native_preview,
-                width,
-                height,
-                poly_mask,
-                &b1,
-                resample,
-                nodata_override,
-                unscale,
-                kind,
-                return_mask,
-                matches!(format, OutputFormat::RawF64),
-                false,
-            )
-            .await
-            .map(BboxRenderOutput::Bytes);
+            if cogs.len() == 1 {
+                let kind = cogs[0].index.full_res().sample_type;
+                return render_exact_f64_array(
+                    engine,
+                    &cogs[0],
+                    bbox,
+                    dst_crs,
+                    native_preview,
+                    width,
+                    height,
+                    poly_mask,
+                    &b1,
+                    resample,
+                    nodata_override,
+                    unscale,
+                    kind,
+                    return_mask,
+                    matches!(format, OutputFormat::RawF64),
+                    false,
+                )
+                .await
+                .map(BboxRenderOutput::Bytes);
+            }
+            let w_us = width.clamp(1, 4096) as usize;
+            let h_us = height.clamp(1, 4096) as usize;
+            let n_px = w_us * h_us;
+            let mut vals = Vec::with_capacity(b1.len() * n_px);
+            let mut kind = cogzilla_raster::SampleType::Float64;
+            let mut first_kind = true;
+            for &band_1 in &b1 {
+                let slot = (band_1.saturating_sub(1) as usize).min(cogs.len() - 1);
+                let cog = &cogs[slot];
+                let st = cog.index.full_res().sample_type;
+                if first_kind {
+                    kind = st;
+                    first_kind = false;
+                } else if kind != st {
+                    kind = cogzilla_raster::SampleType::Float64;
+                }
+                let plane_bytes = render_exact_f64_array(
+                    engine,
+                    cog,
+                    bbox,
+                    dst_crs,
+                    native_preview,
+                    width,
+                    height,
+                    poly_mask,
+                    &[1],
+                    resample,
+                    nodata_override,
+                    unscale,
+                    st,
+                    return_mask,
+                    true,
+                    false,
+                )
+                .await?;
+                if plane_bytes.len() == n_px * 8 {
+                    for chunk in plane_bytes.chunks_exact(8) {
+                        vals.push(f64::from_le_bytes(chunk.try_into().unwrap()));
+                    }
+                } else {
+                    vals.resize(vals.len() + n_px, f64::NAN);
+                }
+            }
+            if format == OutputFormat::RawF64 {
+                let mut out = BytesMut::with_capacity(vals.len() * 8);
+                for v in vals {
+                    out.put_slice(&v.to_le_bytes());
+                }
+                return Ok(BboxRenderOutput::Bytes(out.freeze()));
+            }
+            return Ok(BboxRenderOutput::Bytes(
+                cogzilla_kernel::encode_npy_typed_f64(
+                    &vals,
+                    b1.len(),
+                    h_us,
+                    w_us,
+                    kind,
+                    None,
+                    return_mask,
+                ),
+            ));
         }
     }
     let w = width.clamp(1, 4096) as usize;
