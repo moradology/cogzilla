@@ -2108,6 +2108,60 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     }))
     out["w78_stac_s2"] = p_w78_stac
 
+    # Wave 79: 5-band RGBN+Alpha (PlanetScope/NAIP layout: count=5, ExtraSamples=[0, 2])
+    # and 4-band uint16 RGB+Alpha (alpha=0/65535)
+    p_w79_rgbn_a = synth_dir / "w79_rgbn_alpha_u8.tif"
+    alpha79 = np.full((128, 128), 255, dtype=np.uint8)
+    alpha79[75:95, 60:80] = 0
+    rgbn_a = np.stack([
+        (30 + xx9 * 1.2).clip(0, 255).astype(np.uint8),
+        (50 + yy9 * 1.1).clip(0, 255).astype(np.uint8),
+        (20 + (xx9 + yy9) * 0.7).clip(0, 255).astype(np.uint8),
+        (100 + xx9 * 0.9 + yy9 * 0.3).clip(0, 255).astype(np.uint8),  # NIR (band 4)
+        alpha79,  # Alpha (band 5)
+    ])
+    with rasterio.open(
+        p_w79_rgbn_a, "w", driver="GTiff", width=128, height=128, count=5, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.undefined,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgbn_a)
+    with rasterio.open(p_w79_rgbn_a) as ds:
+        assert ds.colorinterp[4] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 5, got {ds.colorinterp}"
+    out["w79_rgbn_alpha_u8"] = p_w79_rgbn_a
+
+    p_w79_rgba16 = synth_dir / "w79_rgba_u16.tif"
+    alpha16 = np.full((128, 128), 65535, dtype=np.uint16)
+    alpha16[75:95, 60:80] = 0
+    rgba16 = np.stack([
+        (500 + xx9 * 40).astype(np.uint16),
+        (800 + yy9 * 35).astype(np.uint16),
+        (300 + (xx9 + yy9) * 20).astype(np.uint16),
+        alpha16,
+    ])
+    with rasterio.open(
+        p_w79_rgba16, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="deflate", predictor=2, photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba16)
+    with rasterio.open(p_w79_rgba16) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w79_rgba_u16"] = p_w79_rgba16
+
     return out
 
 
@@ -6733,6 +6787,20 @@ def main() -> int:
                 ("PARITY W78 10-BAND STAC pipe s2|bidx=10,8,4 unscale .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_stac_s2'])}&assets={qe('s2|bidx=10,8,4')}&unscale=true", None, "npy"),
                 ("PARITY W78 10-BAND STAC pipe s2|expression=(b10-b4)/(b10+b4) .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w78_stac_s2'])}&assets={qe('s2|expression=(b10-b4)/(b10+b4)')}&unscale=true", None, "npy"),
                 ("PARITY W78 10-BAND STAC pipe s2|bidx=10 /point unscale", "GET", f"/stac/point/-122.25,37.75?url={q(s['w78_stac_s2'])}&assets={qe('s2|bidx=10')}&unscale=true", None, "point"),
+                # --- Wave 79: 5-band RGBN+Alpha (ExtraSamples=[0, 2]) & 4-band uint16 RGB+Alpha (alpha=0/65535) ---
+                ("PARITY W79 RGBN+ALPHA default RGB tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w79_rgbn_alpha_u8'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W79 RGBN+ALPHA false-color bidx=4,1,2 .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w79_rgbn_alpha_u8'])}&bidx=4&bidx=1&bidx=2", None, "png"),
+                ("BETTER W79 RGBN+ALPHA NDVI viridis .png (cw 87.67% valid, tt 0% blank)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w79_rgbn_alpha_u8'])}&expression={qe('(b4-b1)/(b4+b1)')}&rescale=-1,1&colormap_name=viridis", None, "better_w79_rgbn_alpha_ndvi_png"),
+                ("BETTER W79 RGBN+ALPHA NDVI .npy consistent f64 mask (cw MIN/MAX, tt 0/255)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w79_rgbn_alpha_u8'])}&expression={qe('(b4-b1)/(b4+b1)')}", None, "better_w79_rgbn_alpha_ndvi_npy"),
+                ("PARITY W79 RGBN+ALPHA /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w79_rgbn_alpha_u8'])}", None, "point"),
+                ("PARITY W79 RGBN+ALPHA GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w79_rgbn_alpha_u8'])}", None, "stats"),
+                ("PARITY W79 RGBN+ALPHA POST /cog/statistics", "POST", f"/cog/statistics?url={q(s['w79_rgbn_alpha_u8'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W79 RGBN+ALPHA /cog/info.geojson", "GET", f"/cog/info.geojson?url={q(s['w79_rgbn_alpha_u8'])}", None, "info_geojson_w23"),
+                ("PARITY W79 RGBA-U16 tile .png (rescale 0..6000)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w79_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "png"),
+                ("PARITY W79 RGBA-U16 tile .npy (3 data + mask)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w79_rgba_u16'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("PARITY W79 RGBA-U16 /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w79_rgba_u16'])}&bidx=1&bidx=2&bidx=3&rescale=0,6000", None, "png"),
+                ("PARITY W79 RGBA-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w79_rgba_u16'])}", None, "stats"),
+                ("PARITY W79 RGBA-U16 /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w79_rgba_u16'])}", None, "point"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7477,6 +7545,26 @@ def main() -> int:
                             hc, ht = jc["b1"]["histogram"], jt["b1"]["histogram"]
                             ok = len(hc[0]) == 5 and len(ht[0]) == 5 and max(abs(a - b) for a, b in zip(hc[1], ht[1])) < 1e-4
                             detail += f" bins={len(hc[0])} edges=[{hc[1][0]}..{hc[1][-1]}]"
+                    elif kind == "better_w79_rgbn_alpha_ndvi_png":
+                        ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
+                        at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
+                        cw_valid = float((ac[:, :, 3] > 0).mean()) * 100.0
+                        tt_valid = float((at[:, :, 3] > 0).mean()) * 100.0
+                        cw_std = float(ac[ac[:, :, 3] > 0, :3].std()) if cw_valid > 0 else 0.0
+                        ok = ac.shape == (256, 256, 4) and 87.0 < cw_valid < 88.5 and cw_std > 10.0 and tt_valid == 0.0
+                        detail = f"cw_valid={cw_valid:.2f}% std={cw_std:.1f} vs tt_valid={tt_valid:.2f}%"
+                    elif kind == "better_w79_rgbn_alpha_ndvi_npy":
+                        ac = np.load(io.BytesIO(r_cw.content))
+                        at = np.load(io.BytesIO(r_tt.content))
+                        fmin, fmax = np.finfo(np.float64).min, np.finfo(np.float64).max
+                        mc = ac[1] > fmin
+                        mt = at[1] > 0.0
+                        mask_eq = float((mc == mt).mean()) * 100.0
+                        cw_ok = ac.shape == (2, 256, 256) and ac.dtype == np.float64 and set(np.unique(ac[1]).tolist()) == {fmin, fmax}
+                        tt_unscaled = at.shape == (2, 256, 256) and at.dtype == np.float64 and set(np.unique(at[1]).tolist()) == {0.0, 255.0}
+                        mean_c, mean_t = float(ac[0][mc].mean()), float(at[0][mt].mean())
+                        ok = cw_ok and tt_unscaled and mask_eq == 100.0 and abs(mean_c - mean_t) < 1e-4
+                        detail = f"mask_eq={mask_eq:.2f}% mean={mean_c:.5f}/{mean_t:.5f} cw_mask=MIN/MAX tt_mask=0/255"
                     elif kind == "better_w73_map_hillshade":
                         ac = np.array(Image.open(io.BytesIO(r_cw.content)).convert("RGBA"))
                         at = np.array(Image.open(io.BytesIO(r_tt.content)).convert("RGBA"))
