@@ -2276,19 +2276,24 @@ async fn render_bbox_core(
                         let bot = v01 * omx + v11 * fx;
                         return top * omy + bot * fy;
                     }
-                    let (mut sum, mut wsum) = (0.0f32, 0.0f32);
-                    for (val, wt) in [
-                        (v00, omx * omy),
-                        (v10, fx * omy),
-                        (v01, omx * fy),
-                        (v11, fx * fy),
+                    let w_lim = src.ifd_w;
+                    let h_lim = src.ifd_h;
+                    let (mut sum, mut wsum, mut wtot) = (0.0f32, 0.0f32, 0.0f32);
+                    for (rx, ry, val, wt) in [
+                        (x0, y0, v00, omx * omy),
+                        (x0 + 1, y0, v10, fx * omy),
+                        (x0, y0 + 1, v01, omx * fy),
+                        (x0 + 1, y0 + 1, v11, fx * fy),
                     ] {
-                        if !val.is_nan() {
-                            sum += val * wt;
-                            wsum += wt;
+                        if rx >= 0 && rx < w_lim && ry >= 0 && ry < h_lim {
+                            wtot += wt;
+                            if !val.is_nan() {
+                                sum += val * wt;
+                                wsum += wt;
+                            }
                         }
                     }
-                    if wsum > 1e-6 { sum / wsum } else { f32::NAN }
+                    if wsum >= 0.5 * wtot && wsum > 1e-6 { sum / wsum } else { f32::NAN }
                 }
                 other => cogzilla_kernel::sample_general_unwidened(
                     src,
@@ -3055,9 +3060,15 @@ async fn render_bbox_core(
                     for (slot, &b1) in bands_1based.iter().enumerate() {
                         let r = get_band_refs(b1, slot);
                         let s = make_src!(&r);
-                        coord_map.for_each_uv(w, h, |_, u, v| {
-                            out.put_slice(&sample(&s, u, v).to_le_bytes());
-                        });
+                        if let Some(p) = plane_of(&s) {
+                            for v in &p[..w * h] {
+                                out.put_slice(&v.to_le_bytes());
+                            }
+                        } else {
+                            coord_map.for_each_uv(w, h, |_, u, v| {
+                                out.put_slice(&sample(&s, u, v).to_le_bytes());
+                            });
+                        }
                     }
                 }
             }

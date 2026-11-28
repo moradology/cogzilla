@@ -800,25 +800,45 @@ fn sample_bilinear<const CLEAN: bool>(src: &BandSource<'_>, u: f32, v: f32) -> f
         let w01 = (1.0 - fx) * fy;
         let w11 = fx * fy;
 
+        let w_lim = src.ifd_w;
+        let h_lim = src.ifd_h;
+        let in0x = x0 >= 0 && x0 < w_lim;
+        let in1x = x0 + 1 >= 0 && x0 + 1 < w_lim;
+        let in0y = y0 >= 0 && y0 < h_lim;
+        let in1y = y0 + 1 >= 0 && y0 + 1 < h_lim;
+
         let mut sum = 0.0f32;
         let mut wsum = 0.0f32;
-        if !v00.is_nan() {
-            sum += v00 * w00;
-            wsum += w00;
+        let mut wtot = 0.0f32;
+        if in0x && in0y {
+            wtot += w00;
+            if !v00.is_nan() {
+                sum += v00 * w00;
+                wsum += w00;
+            }
         }
-        if !v10.is_nan() {
-            sum += v10 * w10;
-            wsum += w10;
+        if in1x && in0y {
+            wtot += w10;
+            if !v10.is_nan() {
+                sum += v10 * w10;
+                wsum += w10;
+            }
         }
-        if !v01.is_nan() {
-            sum += v01 * w01;
-            wsum += w01;
+        if in0x && in1y {
+            wtot += w01;
+            if !v01.is_nan() {
+                sum += v01 * w01;
+                wsum += w01;
+            }
         }
-        if !v11.is_nan() {
-            sum += v11 * w11;
-            wsum += w11;
+        if in1x && in1y {
+            wtot += w11;
+            if !v11.is_nan() {
+                sum += v11 * w11;
+                wsum += w11;
+            }
         }
-        if wsum > 1e-6 {
+        if wsum >= 0.5 * wtot && wsum > 1e-6 {
             sum / wsum
         } else {
             f32::NAN
@@ -1055,7 +1075,7 @@ pub fn sample_general_unwidened(
                     }
                 }
             }
-            if wsum > 1e-6 { sum / wsum } else { f32::NAN }
+            if wsum >= 0.5 { sum / wsum } else { f32::NAN }
         }
         ResampleMode::Lanczos => {
             let (x0, fx) = fast_floor_i32(u);
@@ -1123,21 +1143,23 @@ pub fn sample_general_unwidened(
             let cy = v.round() as i32;
             let mut sum = 0.0f32;
             let mut wsum = 0.0f32;
+            let mut wtot = 0.0f32;
             for dy in -1..=1 {
                 let ry = cy + dy;
                 let ydiff = ry as f32 - v;
                 for dx in -1..=1 {
                     let rx = cx + dx;
+                    let xdiff = rx as f32 - u;
+                    let w = (-0.888_888_9 * (xdiff * xdiff + ydiff * ydiff)).exp();
+                    wtot += w;
                     let s = src.sample_checked(rx, ry);
                     if !s.is_nan() {
-                        let xdiff = rx as f32 - u;
-                        let w = (-0.888_888_9 * (xdiff * xdiff + ydiff * ydiff)).exp();
                         sum += s * w;
                         wsum += w;
                     }
                 }
             }
-            if wsum > 1e-6 { sum / wsum } else { f32::NAN }
+            if wsum >= 0.5 * wtot && wsum > 1e-6 { sum / wsum } else { f32::NAN }
         }
         ResampleMode::Average
         | ResampleMode::Mode
@@ -1584,7 +1606,7 @@ pub fn sample_f64_general(
                     wsum += w;
                 }
             }
-            if wsum > 1e-12 { sum / wsum } else { f64::NAN }
+            if wsum >= 0.5 { sum / wsum } else { f64::NAN }
         }
         _ => {
             // For higher-order / footprint modes on wide dtypes, fall back to nearest when exact

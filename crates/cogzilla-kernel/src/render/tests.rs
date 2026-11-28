@@ -1461,5 +1461,58 @@ mod npy_typed_tests {
         // Completely outside footprint still returns NaN
         assert!(sample_general_scaled(&src, -5.0, 4.0, 4.0, 4.0, ResampleMode::Average).is_nan());
     }
+
+    #[test]
+    fn smoothing_resamplers_require_majority_valid_weight() {
+        // 8x8 raster where x < 4 is valid (100.0) and x >= 4 is NaN.
+        let mut slab = cogzilla_codec::AlignedF32Slab::filled(64, f32::NAN);
+        let data = slab.as_mut_slice();
+        for y in 0..8 {
+            for x in 0..4 {
+                data[y * 8 + x] = 100.0;
+            }
+        }
+        let band = cogzilla_codec::DecodedBand {
+            data: cogzilla_codec::BandData::F32(slab),
+            width: 8,
+            height: 8,
+            stats: cogzilla_codec::BlockStats {
+                all_nodata: false,
+                no_nodata: false,
+                min: 100.0,
+                max: 100.0,
+            },
+        };
+        let blocks = [Some(&band)];
+        let src = BandSource::new(8, 8, 8, 8, 0, 0, 1, 1, &blocks);
+
+        // Bilinear at u=3.25, v=4.0: valid weight = 0.75 >= 0.5 -> valid (100.0).
+        let v_maj = sample_bilinear::<false>(&src, 3.25, 4.0);
+        assert!((v_maj - 100.0).abs() < 1e-4, "expected 100.0 for wsum=0.75, got {v_maj}");
+        // Bilinear at u=3.5, v=4.0: valid weight = 0.5 >= 0.5 -> valid (100.0).
+        let v_half = sample_bilinear::<false>(&src, 3.5, 4.0);
+        assert!((v_half - 100.0).abs() < 1e-4, "expected 100.0 for wsum=0.5, got {v_half}");
+        // Bilinear at u=3.75, v=4.0: valid weight = 0.25 < 0.5 -> NaN (no nodata-collar bloat).
+        let v_min = sample_bilinear::<false>(&src, 3.75, 4.0);
+        assert!(v_min.is_nan(), "expected NaN for wsum=0.25, got {v_min}");
+
+        // CubicSpline & Gauss & widened Bilinear all follow majority-valid (>= 0.5).
+        for mode in [ResampleMode::CubicSpline, ResampleMode::Gauss] {
+            let maj = sample_general_unwidened(&src, 3.25, 4.0, 1.0, 1.0, mode);
+            assert!((maj - 100.0).abs() < 1e-4, "{mode:?} majority expected 100.0, got {maj}");
+            let min = sample_general_unwidened(&src, 3.75, 4.0, 1.0, 1.0, mode);
+            assert!(min.is_nan(), "{mode:?} minority expected NaN, got {min}");
+        }
+        let w_maj = sample_general_scaled(&src, 3.25, 4.0, 2.0, 2.0, ResampleMode::Bilinear);
+        assert!((w_maj - 100.0).abs() < 1e-4, "widened Bilinear majority expected 100.0, got {w_maj}");
+        let w_min = sample_general_scaled(&src, 3.75, 4.0, 2.0, 2.0, ResampleMode::Bilinear);
+        assert!(w_min.is_nan(), "widened Bilinear minority expected NaN, got {w_min}");
+
+        // f64 Bilinear also requires majority-valid (>= 0.5).
+        let f64_maj = sample_f64_general(&src, 3.25, 4.0, ResampleMode::Bilinear);
+        assert!((f64_maj - 100.0).abs() < 1e-9, "f64 Bilinear majority expected 100.0, got {f64_maj}");
+        let f64_min = sample_f64_general(&src, 3.75, 4.0, ResampleMode::Bilinear);
+        assert!(f64_min.is_nan(), "f64 Bilinear minority expected NaN, got {f64_min}");
+    }
 }
 
