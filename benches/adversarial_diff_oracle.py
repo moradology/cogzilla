@@ -6495,6 +6495,22 @@ def main() -> int:
                 ("PARITY W71 MULTI-EXPR STAC unscale=true 3-band /point", "GET", f"/stac/point/-122.25,37.75?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&expression={qe('b2-b1;b2+b1;(b2-b1)/(b2+b1)')}", None, "point"),
                 ("PARITY W71 MULTI-EXPR STAC unscale=true 3-band GET /statistics", "GET", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&expression={qe('b2-b1;b2+b1;(b2-b1)/(b2+b1)')}", None, "stats"),
                 ("PARITY W71 MULTI-EXPR STAC unscale=true 3-band POST /statistics", "POST", f"/stac/statistics?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&unscale=true&expression={qe('b2-b1;b2+b1;(b2-b1)/(b2+b1)')}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                # --- Wave 72: Expression VM deep ops (signed modulo %, ModPow2, log1p/expm1, arcsin/arccos/arctan, sinh/cosh, floor/ceil) & 3-band non-u8 GeoTIFF matrix ---
+                ("PARITY W72 EXPR signed modulo (-b1)%10 + (-b1)%8 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('((-b1)%10)+((-b1)%8)')}", None, "npy"),
+                ("PARITY W72 EXPR negative-divisor modulo b1%-10 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('b1%-10')}", None, "npy"),
+                ("PARITY W72 EXPR log1p + expm1 .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('log1p(abs(b1)*0.01)+expm1(abs(b1)*0.002)')}", None, "npy"),
+                ("PARITY W72 EXPR arcsin + arccos + arctan .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('arcsin(b1/400.0)+arccos(b1/400.0)+arctan(b1*0.01)')}", None, "npy"),
+                ("PARITY W72 EXPR sinh + cosh .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('sinh(b1*0.005)+cosh(b1*0.005)')}", None, "npy"),
+                ("PARITY W72 EXPR floor + ceil on signed float .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w55_f32_imask'])}&expression={qe('floor(b1*0.13)-ceil(-b1*0.13)')}", None, "npy"),
+                ("PARITY W72 EXPR double-neg & unary -(b1-b2) .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w43_rgb_nodata'])}&expression={qe('--b1-(b2-b3)')}", None, "npy"),
+                ("PARITY W72 GEOTIFF 3-band uint16 tile .tif (MinIsBlack)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w67_stac_scaled'].parent / 'w67_ms_hetero_scale_u16.tif')}", None, "geotiff"),
+                ("PARITY W72 GEOTIFF 3-band float32 tile .tif (MinIsBlack)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w33_planar_f32_zstd_p3'])}", None, "geotiff"),
+                ("PARITY W72 GEOTIFF 3-band uint8 return_mask=false .tif (RGB)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w43_rgb_nodata'])}&return_mask=false", None, "geotiff"),
+                ("PARITY W72 GEOTIFF 3-band uint16 return_mask=false .tif (MinIsBlack)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w67_stac_scaled'].parent / 'w67_ms_hetero_scale_u16.tif')}&return_mask=false", None, "geotiff"),
+                ("PARITY W72 INFO.GEOJSON internal 1-bit mask float32", "GET", f"/cog/info.geojson?url={q(s['w55_f32_imask'])}", None, "info_geojson_w23"),
+                ("PARITY W72 INFO.GEOJSON NBITS=12 nodata=4095 scaled", "GET", f"/cog/info.geojson?url={q(s['w67_nbits12_nodata_scaled'])}", None, "info_geojson_w23"),
+                ("PARITY W72 INFO.GEOJSON ROT90 (a=0,e=0)", "GET", f"/cog/info.geojson?url={q(s['w69_rot90_4326'])}", None, "info_geojson_w23"),
+                ("BETTER W72 INFO.GEOJSON MIRROR-X (a<0) valid bounds (cw minx<maxx, tt inverted)", "GET", f"/cog/info.geojson?url={q(s['w69_mirror_x_4326'])}", None, "better_w72_mirror_info"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
@@ -7227,6 +7243,19 @@ def main() -> int:
                             hc, ht = jc["b1"]["histogram"], jt["b1"]["histogram"]
                             ok = len(hc[0]) == 5 and len(ht[0]) == 5 and max(abs(a - b) for a, b in zip(hc[1], ht[1])) < 1e-4
                             detail += f" bins={len(hc[0])} edges=[{hc[1][0]}..{hc[1][-1]}]"
+                    elif kind == "better_w72_mirror_info":
+                        jc, jt = r_cw.json(), r_tt.json()
+                        pc, pt = jc["properties"], jt["properties"]
+                        bc, bt = pc["bounds"], pt["bounds"]
+                        ok = (
+                            jc.get("type") == "Feature"
+                            and jc.get("geometry", {}).get("type") == "Polygon"
+                            and len(bc) == 4 and len(bt) == 4
+                            and bc[0] < bc[2] and bt[0] > bt[2]
+                            and max(abs(a - b) for a, b in zip(bc, [-122.6, 37.4, -121.9, 38.1])) < 1e-6
+                            and pc["count"] == pt["count"] and pc["dtype"] == pt["dtype"]
+                        )
+                        detail = f"cw bounds={[round(x, 2) for x in bc]} vs tt bounds={[round(x, 2) for x in bt]}"
                     elif kind == "info_geojson_w23":
                         jc, jt = r_cw.json(), r_tt.json()
                         ok = (
