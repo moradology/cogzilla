@@ -1787,6 +1787,22 @@ def compare_stats_strict(j_cw: dict, j_tt: dict) -> tuple[bool, str]:
                     edge_scale = max(1.0, max(abs(float(y)) for y in eb_h))
                     if edge_err / edge_scale > 2e-2:
                         diffs.append(f"{k}.histogram edges err={edge_err:.4g}")
+                    sa_h = sum(float(x) for x in ca_h)
+                    sb_h = sum(float(y) for y in cb_h)
+                    ca_ref = float(a.get("count") or a.get("valid_pixels") or 0.0)
+                    cb_ref = float((b.get("count") if "area" in b else b.get("valid_pixels")) or b.get("count") or 0.0)
+                    if sb_h > 0.0:
+                        if ca_ref > 0.0 and cb_ref > 0.0:
+                            if abs(sa_h / ca_ref - sb_h / cb_ref) > 3e-2:
+                                diffs.append(f"{k}.histogram frac: cw={sa_h/ca_ref:.3f} vs tt={sb_h/cb_ref:.3f}")
+                        elif abs(sa_h - sb_h) / sb_h > 5e-2:
+                            diffs.append(f"{k}.histogram sum: cw={sa_h:.1f} vs tt={sb_h:.1f}")
+                        if sa_h > 0.0:
+                            l1 = sum(abs(float(x) / sa_h - float(y) / sb_h) for x, y in zip(ca_h, cb_h))
+                            if l1 > 0.08:
+                                diffs.append(f"{k}.histogram counts L1={l1:.3f}")
+                    elif sa_h > 0.0:
+                        diffs.append(f"{k}.histogram sum: cw={sa_h:.1f} vs tt=0")
         ca, cb = a.get("count"), b.get("count")
         if (ca is None) != (cb is None):
             diffs.append(f"{k}.count: cw={ca} vs tt={cb}")
@@ -5953,6 +5969,17 @@ def main() -> int:
                 ("PARITY W62 STAC tile expr .tif", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w36_stac5b'])}&assets={qe('ms|expression=(b4-b3)/(b4+b3)')}", None, "geotiff"),
                 ("PARITY W62 STAC /point coord_crs=EPSG:3857", "GET", f"/stac/point/-13608804.60,4544181.28?url={q(s['w36_stac5b'])}&assets=ms&coord_crs=EPSG:3857", None, "point"),
                 ("PARITY W62 STAC tile RGB .webp", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.webp?url={q(s['w36_stac5b'])}&assets={qe('ms|bidx=1,2,3')}&rescale=0,255", None, "png"),
+                # --- Wave 63: bidx reordering + per-band rescale/CF, normalizedIndex/terrarium/contours on bbox/feature/preview, POST /statistics non-uniform histogram_bins & histogram_range ---
+                ("PARITY W63 BIDX REORDER 3,1,2 + per-band rescale .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w43_rgb_nodata'])}&bidx=3&bidx=1&bidx=2&rescale=0,250&rescale=0,120&rescale=0,180", None, "png"),
+                ("PARITY W63 BIDX REORDER 3,1,2 + per-band rescale + CF .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w43_rgb_nodata'])}&bidx=3&bidx=1&bidx=2&rescale=0,250&rescale=0,120&rescale=0,180&color_formula={qe('Gamma R 1.3 Gamma G 0.9 Gamma B 1.2')}", None, "png"),
+                ("PARITY W63 BIDX REORDER 3,1,2 + per-band rescale /preview .png", "GET", f"/cog/preview/64x64.png?url={q(s['w43_rgb_nodata'])}&bidx=3&bidx=1&bidx=2&rescale=0,250&rescale=0,120&rescale=0,180", None, "png"),
+                ("PARITY W63 BIDX REORDER 3,1,2 + per-band rescale POST /feature .png", "POST", f"/cog/feature/64x64.png?url={q(s['w43_rgb_nodata'])}&bidx=3&bidx=1&bidx=2&rescale=0,250&rescale=0,120&rescale=0,180", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "png"),
+                ("PARITY W63 ALG normalizedIndex GET /bbox .npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w43_rgb_nodata'])}&bidx=3&bidx=1&algorithm=normalizedIndex", None, "npy"),
+                ("PARITY W63 ALG normalizedIndex POST /feature .npy", "POST", f"/cog/feature/64x64.npy?url={q(s['w43_rgb_nodata'])}&bidx=3&bidx=1&algorithm=normalizedIndex", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "npy"),
+                ("PARITY W63 ALG terrarium GET /bbox .png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w19_dem_f32'])}&algorithm=terrarium", None, "png"),
+                ("PARITY W63 ALG contours GET /preview .png", "GET", f"/cog/preview/64x64.png?url={q(s['w19_dem_f32'])}&algorithm=contours&algorithm_params={qe(json.dumps({'increment': 25, 'thickness': 2}))}", None, "png"),
+                ("PARITY W63 POST /statistics non-uniform hist + p=5,50,95", "POST", f"/cog/statistics?url={q(s['w50_donut'])}&histogram_bins=20,40,70,110,130&p=5&p=50&p=95", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "post_stats"),
+                ("PARITY W63 POST /statistics histogram_range=40,100 bins=4", "POST", f"/cog/statistics?url={q(s['w50_donut'])}&histogram_bins=4&histogram_range=40,100", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]], [[-122.33, 37.67], [-122.33, 37.83], [-122.17, 37.83], [-122.17, 37.67], [-122.33, 37.67]]]}}, "post_stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
