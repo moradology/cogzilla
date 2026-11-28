@@ -20,7 +20,7 @@ mod algorithm_math;
 mod cog;
 mod algorithm_params;
 mod pgstac;
-mod array_type;
+pub(crate) mod array_type;
 #[cfg(test)]
 mod asset_query_pins;
 mod metrics;

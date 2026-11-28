@@ -994,15 +994,14 @@ async fn render_bbox_core(
             _ => {}
         }
     }
-    // Exact f64 data path for wide sample types (`Uint32`, `Int32`, `Uint64`, `Int64`, `Float64`)
-    // on unstyled `.npy` / `.tif` requests (single-COG and multi-COG stacks): bypasses `f32`
-    // quantization while leaving the hot 8-bit / f32 render path completely untouched (#619).
+    // Exact f64 data path for wide sample types (`Uint32`, `Int32`, `Uint64`, `Int64`, `Float64`,
+    // including promoted multi-asset integer stacks like `Uint16 + Int16 -> Int32`) on unstyled
+    // `.npy` / `.tif` requests (single-COG and multi-COG stacks): bypasses `f32` quantization
+    // while leaving the hot 8-bit / f32 render path completely untouched (#619).
     if !cogs.is_empty()
         && !unscale
         && color_formula.is_none()
-        && custom_lut.is_none()
         && matches!(resample, ResampleMode::Nearest | ResampleMode::Bilinear)
-        && cogs.iter().any(|c| c.index.full_res().sample_type.needs_f64())
         && matches!(format, OutputFormat::RawF64 | OutputFormat::NpyF64)
     {
         let bands_1based: Option<Vec<u16>> = match bands {
@@ -1048,8 +1047,8 @@ async fn render_bbox_core(
                 if first_kind {
                     kind = st;
                     first_kind = false;
-                } else if kind != st {
-                    kind = cogzilla_raster::SampleType::Float64;
+                } else {
+                    kind = crate::http::array_type::wider_type(kind, st);
                 }
                 let plane_bytes = render_exact_f64_array(
                     engine,
@@ -1098,6 +1097,12 @@ async fn render_bbox_core(
             ));
         }
     }
+    // Never fall through to the RGBA path with `RawF64` / `NpyF64`.
+    let format = match format {
+        OutputFormat::RawF64 => OutputFormat::RawF32,
+        OutputFormat::NpyF64 => OutputFormat::Npy,
+        other => other,
+    };
     let w = width.clamp(1, 4096) as usize;
     let h = height.clamp(1, 4096) as usize;
     let primary = &cogs[0];
