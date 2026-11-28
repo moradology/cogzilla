@@ -1889,6 +1889,32 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
         ds.write(u8_nb4, 1)
     out["w67_nbits4_nodata"] = p_w67_nb4
 
+    # Wave 68: Odd prime-dimension (137x113) YCbCr 4:2:0 JPEG-in-TIFF (tiled partial MCU edge + striped)
+    yy68, xx68 = np.mgrid[0:113, 0:137]
+    rgb_w68 = np.stack([
+        (30 + xx68 * 1.4 + yy68 * 0.3).clip(0, 255).astype(np.uint8),
+        (220 - xx68 * 0.8 + yy68 * 0.2).clip(0, 255).astype(np.uint8),
+        (40 + yy68 * 1.6).clip(0, 255).astype(np.uint8),
+    ])
+    tf_w68 = from_bounds(-122.6, 37.4, -121.9, 38.1, 137, 113)
+    p_w68_yt = synth_dir / "w68_ycbcr_odd_tiled.tif"
+    with rasterio.open(
+        p_w68_yt, "w", driver="GTiff", width=137, height=113, count=3, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w68, tiled=True, blockxsize=64, blockysize=64,
+        compress="JPEG", photometric="YCBCR", jpeg_quality=92,
+    ) as ds:
+        ds.write(rgb_w68)
+    out["w68_ycbcr_odd_tiled"] = p_w68_yt
+
+    p_w68_ys = synth_dir / "w68_ycbcr_odd_strip.tif"
+    with rasterio.open(
+        p_w68_ys, "w", driver="GTiff", width=137, height=113, count=3, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w68, tiled=False, blockysize=16,
+        compress="JPEG", photometric="YCBCR", jpeg_quality=92,
+    ) as ds:
+        ds.write(rgb_w68)
+    out["w68_ycbcr_odd_strip"] = p_w68_ys
+
     return out
 
 
@@ -3995,6 +4021,9 @@ def run_wave28_wms_and_mosaic_checks(
         "W28 WMS FORMAT=image/jpeg",
         "W28 WMS FORMAT=image/tiff georeferenced GeoTIFF",
         "W28 WMS invalid REQUEST=Bogus -> 400",
+        "W68 WMS 1.3.0 GetMap CRS=EPSG:32610 (projected UTM) vs GDAL",
+        "W68 WMS 1.3.0 GetMap CRS=EPSG:4258 (ETRS89 lat,lon swap) vs GDAL",
+        "W68 WMS 1.3.0 GetMap COLORMAP_NAME=viridis + RESCALE + UNSCALE=true",
         "W28 MOSAIC TileJSON WebMercatorQuad",
         "W28 MOSAIC WMTS Capabilities XML",
         "W28 MOSAIC POST /statistics FeatureCollection",
@@ -4214,6 +4243,98 @@ def run_wave28_wms_and_mosaic_checks(
         p = f"/cog/wms?url={q(cog_p)}&SERVICE=WMS&VERSION=1.3.0&REQUEST=Bogus"
         r = client.get(cw_base + p)
         rec(lb, r.status_code == 400, f"status={r.status_code}", p)
+
+    def _gdal_reproject(dst_crs: str, dst_bounds: tuple[float, float, float, float], width: int, height: int) -> np.ndarray:
+        from rasterio.warp import reproject as _warp_reproject, Resampling as _WarpResampling
+        dst = np.zeros((3, height, width), dtype=np.uint8)
+        dst_tf = from_bounds(*dst_bounds, width, height)
+        for bi in range(3):
+            _warp_reproject(
+                source=arr[bi], destination=dst[bi],
+                src_transform=tf, src_crs="EPSG:4326", src_nodata=0,
+                dst_transform=dst_tf, dst_crs=dst_crs, dst_nodata=0,
+                resampling=_WarpResampling.nearest,
+            )
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba[:, :, :3] = np.transpose(dst, (1, 2, 0))
+        rgba[:, :, 3] = np.where((dst[0] == 0) & (dst[1] == 0) & (dst[2] == 0), 0, 255).astype(np.uint8)
+        return rgba
+
+    lb = "W68 WMS 1.3.0 GetMap CRS=EPSG:32610 (projected UTM) vs GDAL"
+    if wanted(lb):
+        utm_b = transform_bounds("EPSG:4326", "EPSG:32610", -122.45, 37.55, -122.05, 37.95)
+        p = (
+            f"/cog/wms?url={q(cog_p)}&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap"
+            f"&CRS=EPSG:32610&BBOX={utm_b[0]:.2f},{utm_b[1]:.2f},{utm_b[2]:.2f},{utm_b[3]:.2f}"
+            f"&WIDTH=128&HEIGHT=128&FORMAT=image/png"
+        )
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            got = np.array(Image.open(io.BytesIO(r.content)).convert("RGBA"))
+            ref = _gdal_reproject("EPSG:32610", utm_b, 128, 128)
+            valid = (got[:, :, 3] == 255) & (ref[:, :, 3] == 255)
+            mae = float(np.abs(got[valid, :3].astype(float) - ref[valid, :3].astype(float)).mean()) if valid.any() else 999.0
+            ok = mae < 1.5 and int(valid.sum()) > 10000
+            rec(lb, ok, f"MAE={mae:.2f} valid_px={int(valid.sum())}", p)
+            check_gpu_img(lb, p, r.content)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
+
+    lb = "W68 WMS 1.3.0 GetMap CRS=EPSG:4258 (ETRS89 lat,lon swap) vs GDAL"
+    if wanted(lb):
+        p = (
+            f"/cog/wms?url={q(cog_p)}&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap"
+            f"&CRS=EPSG:4258&BBOX=37.5,-122.5,38.0,-122.0&WIDTH=128&HEIGHT=128&FORMAT=image/png"
+        )
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            got = np.array(Image.open(io.BytesIO(r.content)).convert("RGBA"))
+            ref = _gdal_reproject("EPSG:4258", (-122.5, 37.5, -122.0, 38.0), 128, 128)
+            valid = (got[:, :, 3] == 255) & (ref[:, :, 3] == 255)
+            mae = float(np.abs(got[valid, :3].astype(float) - ref[valid, :3].astype(float)).mean()) if valid.any() else 999.0
+            hole_a = int(got[56, 56, 3])
+            ok = mae < 1.0 and hole_a == 0 and int(valid.sum()) > 14000
+            rec(lb, ok, f"MAE={mae:.2f} hole_a={hole_a} valid_px={int(valid.sum())}", p)
+            check_gpu_img(lb, p, r.content)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
+
+    lb = "W68 WMS 1.3.0 GetMap COLORMAP_NAME=viridis + RESCALE + UNSCALE=true"
+    if wanted(lb):
+        wms_scaled = w28_dir / "w68_wms_scaled.tif"
+        yy_s, xx_s = np.mgrid[0:128, 0:128]
+        u16_s = (1000 + xx_s * 20 + yy_s * 15).astype(np.uint16)
+        u16_s[40:60, 40:60] = 0
+        with rasterio.open(
+            wms_scaled, "w", driver="GTiff", width=128, height=128, count=1, dtype="uint16",
+            crs="EPSG:4326", transform=tf, tiled=True, blockxsize=64, blockysize=64,
+            compress="deflate", nodata=0,
+        ) as ds:
+            ds.write(u16_s, 1)
+            ds.scales = (0.001,)
+            ds.offsets = (-0.5,)
+        p = (
+            f"/cog/wms?url={q(wms_scaled)}&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap"
+            f"&CRS=EPSG:4326&BBOX=37.5,-122.5,38.0,-122.0&WIDTH=128&HEIGHT=128&FORMAT=image/png"
+            f"&unscale=true&rescale=0.5,5.0&colormap_name=viridis"
+        )
+        r = client.get(cw_base + p)
+        if r.status_code == 200:
+            got = np.array(Image.open(io.BytesIO(r.content)).convert("RGBA"))
+            # Compare against /cog/bbox with identical params
+            pb = f"/cog/bbox/-122.5,37.5,-122.0,38.0/128x128.png?url={q(wms_scaled)}&unscale=true&rescale=0.5,5.0&colormap_name=viridis"
+            rb = client.get(cw_base + pb)
+            if rb.status_code == 200:
+                ref = np.array(Image.open(io.BytesIO(rb.content)).convert("RGBA"))
+                mae = float(np.abs(got.astype(float) - ref.astype(float)).mean())
+                hole_a = int(got[50, 50, 3])
+                ok = mae == 0.0 and hole_a == 0 and int((got[:, :, 3] == 255).sum()) > 15000
+                rec(lb, ok, f"MAE_vs_bbox={mae:.2f} hole_a={hole_a}", p)
+                check_gpu_img(lb, p, r.content)
+            else:
+                rec(lb, False, f"ref /bbox HTTP {rb.status_code}", p)
+        else:
+            rec(lb, False, f"HTTP {r.status_code} {r.text[:80]!r}", p)
 
     lb = "W28 MOSAIC TileJSON WebMercatorQuad"
     if wanted(lb):
@@ -4536,6 +4657,9 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
         "W54 ZARR GET /tiles algorithm=hillshade .png",
         "W54 ZARR POST /feature donut coord_crs=EPSG:3857 .npy",
         "W57 ZARR v3 standalone bitshuffle + gzip /bbox .npy",
+        "W68 ZARR v3 zstd codec /bbox .npy",
+        "W68 ZARR v2 3D sel=time=nearest/pad/backfill /point",
+        "W68 ZARR v2 3D sel= conflicting methods -> 400",
     ]
     if not any(wanted(lb) for lb in labels):
         return 0
@@ -4857,6 +4981,9 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
         "W54 ZARR GET /tiles algorithm=hillshade .png",
         "W54 ZARR POST /feature donut coord_crs=EPSG:3857 .npy",
         "W57 ZARR v3 standalone bitshuffle + gzip /bbox .npy",
+        "W68 ZARR v3 zstd codec /bbox .npy",
+        "W68 ZARR v2 3D sel=time=nearest/pad/backfill /point",
+        "W68 ZARR v2 3D sel= conflicting methods -> 400",
     ]
     if any(wanted(l) for l in w44_labels):
         def _crc32c_w44(data: bytes) -> int:
@@ -5238,6 +5365,91 @@ def run_wave30_zarr_codecs_multiurl_rpc_checks(
                             gpu_diffs.append({"label": lb, "detail": det_g})
             else:
                 rec(lb, False, f"HTTP {rb.status_code} {rb.text[:80]!r}", p_bb)
+
+        lb = "W68 ZARR v3 zstd codec /bbox .npy"
+        if wanted(lb):
+            import shutil as _shutil
+            zstd_bin = _shutil.which("zstd")
+            if zstd_bin:
+                zstd_payload = subprocess.run([zstd_bin, "-3", "-c"], input=raw44, capture_output=True, check=True).stdout
+            else:
+                # Valid RFC 8878 Zstd frame with a single last raw (uncompressed) block
+                n = len(raw44)
+                bh = (1 | (0 << 1) | (n << 3)).to_bytes(3, "little")
+                zstd_payload = b"\x28\xb5\x2f\xfd\xa0" + n.to_bytes(4, "little") + bh + raw44
+            z_zstd3 = _mk_z3_w44(
+                "w68_z3_zstd.zarr",
+                [
+                    {"name": "bytes", "configuration": {"endian": "little"}},
+                    {"name": "zstd", "configuration": {"level": 3}},
+                ],
+                zstd_payload,
+            )
+            p_bb = f"/zarr/bbox/-122.5,37.5,-122.0,38.0/64x64.npy?url={q(z_zstd3)}&variable=data"
+            rb = client.get(cw_base + p_bb)
+            if rb.status_code == 200:
+                ab = np.load(io.BytesIO(rb.content))
+                err = float(np.abs(ab[0] - arr44).max())
+                rec(lb, err < 1e-4, f"max_err={err:.5f}", p_bb)
+                if gpu_base:
+                    rbg = client.get(gpu_base + p_bb)
+                    if rbg.status_code != 200:
+                        gpu_diffs.append({"label": lb, "detail": f"GPU HTTP {rbg.status_code}"})
+                    else:
+                        ok_g, det_g = compare_npy(rb.content, rbg.content, check_values=True)
+                        if not ok_g:
+                            gpu_diffs.append({"label": lb, "detail": det_g})
+            else:
+                rec(lb, False, f"HTTP {rb.status_code} {rb.text[:80]!r}", p_bb)
+
+        if wanted("W68 ZARR v2 3D sel=time=nearest/pad/backfill /point") or wanted("W68 ZARR v2 3D sel= conflicting methods -> 400"):
+            z_sel = w30_dir / "w68_sel3d.zarr"
+            z_sel.mkdir(exist_ok=True)
+            (z_sel / ".zgroup").write_text(json.dumps({"zarr_format": 2}))
+            t_coords = np.array([10.0, 20.0, 30.0], dtype=np.float64)
+            d3 = np.stack([
+                np.full((64, 64), 111.0, dtype=np.float32),
+                np.full((64, 64), 222.0, dtype=np.float32),
+                np.full((64, 64), 333.0, dtype=np.float32),
+            ])
+            for nm, arr_v, ch, dims, key in [
+                ("time", t_coords, [3], ["time"], "0"),
+                ("lon", lon, [64], ["lon"], "0"),
+                ("lat", lat, [64], ["lat"], "0"),
+                ("temp", d3, [3, 64, 64], ["time", "lat", "lon"], "0.0.0"),
+            ]:
+                vd = z_sel / nm
+                vd.mkdir(exist_ok=True)
+                (vd / ".zarray").write_text(json.dumps({
+                    "zarr_format": 2, "shape": list(arr_v.shape), "chunks": ch,
+                    "dtype": arr_v.dtype.str, "compressor": None, "fill_value": None, "order": "C", "filters": None,
+                }))
+                (vd / ".zattrs").write_text(json.dumps({"_ARRAY_DIMENSIONS": dims}))
+                (vd / key).write_bytes(np.ascontiguousarray(arr_v).tobytes())
+
+            lb = "W68 ZARR v2 3D sel=time=nearest/pad/backfill /point"
+            if wanted(lb):
+                checks_sel = [
+                    ("time=nearest::14.0", 111.0),
+                    ("time=nearest::16.0", 222.0),
+                    ("time=pad::29.0", 222.0),
+                    ("time=backfill::11.0", 222.0),
+                ]
+                got_vals = []
+                ok_all = True
+                for expr_s, exp_v in checks_sel:
+                    ps = f"/zarr/point/-122.25,37.75?url={q(z_sel)}&variable=temp&sel={qe(expr_s)}"
+                    rs = client.get(cw_base + ps)
+                    if rs.status_code != 200 or abs(rs.json()["values"][0] - exp_v) > 1e-4:
+                        ok_all = False
+                    got_vals.append(rs.json()["values"][0] if rs.status_code == 200 else f"HTTP{rs.status_code}")
+                rec(lb, ok_all, f"vals={got_vals} exp=[111,222,222,222]", ps)
+
+            lb = "W68 ZARR v2 3D sel= conflicting methods -> 400"
+            if wanted(lb):
+                pc = f"/zarr/point/-122.25,37.75?url={q(z_sel)}&variable=temp&sel={qe('time=nearest::14.0')}&sel={qe('time=pad::29.0')}"
+                rc = client.get(cw_base + pc)
+                rec(lb, rc.status_code == 400, f"status={rc.status_code}", pc)
 
     return ran
 
@@ -6184,6 +6396,16 @@ def main() -> int:
                 ("PARITY W67 NBITS=12 nodata=4095 unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&unscale=true", None, "npy"),
                 ("PARITY W67 NBITS=12 nodata=4095 GET /statistics", "GET", f"/cog/statistics?url={q(s['w67_nbits12_nodata_scaled'])}", None, "stats"),
                 ("PARITY W67 NBITS=4 nodata=15 resampling=cubic .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits4_nodata'])}&resampling=cubic", None, "npy"),
+                # --- Wave 68: Odd prime-dim (137x113) YCbCr JPEG-in-TIFF + non-default tilesize (512/128) combos ---
+                ("PARITY W68 YCbCr JPEG odd 137x113 tiled .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w68_ycbcr_odd_tiled'])}", None, "png"),
+                ("PARITY W68 YCbCr JPEG odd 137x113 tiled .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w68_ycbcr_odd_tiled'])}", None, "npy"),
+                ("PARITY W68 YCbCr JPEG odd 137x113 tiled /point edge", "GET", f"/cog/point/-121.92,37.42?url={q(s['w68_ycbcr_odd_tiled'])}", None, "point"),
+                ("PARITY W68 YCbCr JPEG odd 137x113 striped .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w68_ycbcr_odd_strip'])}", None, "png"),
+                ("PARITY W68 TILESIZE=512 hillshade buffer=3 .png", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.png?url={q(merc)}&tilesize=512&algorithm=hillshade&buffer=3", None, "png"),
+                ("PARITY W68 TILESIZE=512 slope buffer=3 .npy", "GET", f"/cog/tiles/WebMercatorQuad/12/657/1582.npy?url={q(merc)}&tilesize=512&algorithm=slope&buffer=3", None, "npy"),
+                ("PARITY W68 TILESIZE=128 cubic + unscale=true .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_nbits12_nodata_scaled'])}&tilesize=128&resampling=cubic&unscale=true", None, "npy"),
+                ("PARITY W68 TILESIZE=512 interval colormap .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w55_f32_imask'])}&tilesize=512&colormap={qe(json.dumps([[[-30,0],[255,0,0,255]],[[0,80],[0,255,0,255]],[[80,120],[0,0,255,128]]]))}", None, "png"),
+                ("PARITY W68 TILESIZE=128 STAC hetero unscale=true .npy", "GET", f"/stac/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w67_stac_scaled'])}&assets=red&assets=nir&tilesize=128&unscale=true", None, "npy"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
