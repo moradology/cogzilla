@@ -177,14 +177,32 @@ pub struct OpenedCog {
     /// `id` of the opened source the URI cache holds: `id` itself, but a `?nodata=` view's
     /// parent's, so a source found changed through a view evicts the parent.
     pub source_id: u64,
-    /// A `?nodata=` view's value for tiles the file leaves unwritten (`byte_count == 0`), when
-    /// that value is data under the view's nodata: GDAL reads such tiles as the file's own
-    /// nodata (or 0 with none), which the override makes valid. `None` keeps them no data.
+    /// Value for tiles the file leaves unwritten (`byte_count == 0`), when GDAL treats them as
+    /// valid data rather than no data: `Some(0.0)` when the file declares no `GDAL_NODATA` and no
+    /// mask/alpha band, or `Some(file_nodata)` on a `?nodata=` view whose override differs from it.
     pub sparse_fill: Option<f64>,
     pub uri: String,
     pub index: CogIndex,
     pub source: CogSource,
     pub freshness: SourceFreshness,
+}
+
+/// Per GDAL `SPARSE_OK` semantics, an unwritten sparse tile (`TileByteCounts == 0`) is filled
+/// with the file's `GDAL_NODATA` (masked -> `None`), or with `0.0` as valid data when the file
+/// declares no `GDAL_NODATA` and no mask/alpha band.
+fn default_sparse_fill(index: &CogIndex) -> Option<f64> {
+    if index.nodata_f64.is_some() || index.nodata.is_some() {
+        return None;
+    }
+    let masked = index.ifds.iter().any(|ifd| {
+        ifd.mask_ifd.is_some()
+            || cogzilla_codec::alpha_channel_index(
+                ifd.samples_per_pixel as usize,
+                &ifd.extra_samples,
+            )
+            .is_some()
+    });
+    (!masked).then_some(0.0)
 }
 
 impl OpenedCog {
@@ -538,10 +556,11 @@ impl CogStore {
             _ => unreachable!(),
         };
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let sparse_fill = default_sparse_fill(&index);
         let cog = Arc::new(OpenedCog {
             id,
             source_id: id,
-            sparse_fill: None,
+            sparse_fill,
             uri: uri.clone(),
             index,
             source,
@@ -1030,10 +1049,11 @@ impl CogStore {
                 };
 
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let sparse_fill = default_sparse_fill(&index);
                 Ok(Arc::new(OpenedCog {
                     id,
                     source_id: id,
-                    sparse_fill: None,
+                    sparse_fill,
                     uri: uri.to_string(),
                     index,
                     source,
