@@ -2395,6 +2395,91 @@ def build_synthetic_fixtures(synth_dir: Path) -> dict[str, Path]:
     }))
     out["w83_stac_u16_i16"] = p_w83_stac
 
+    # Wave 84: Multi-band LERC2 (3-band f32, 3-band u16 LERC_ZSTD), lossless float64 LERC2, & 4-band RGBA WebP-in-TIFF
+    p_w84_lerc3_f32 = synth_dir / "w84_lerc_3b_f32.tif"
+    lerc3_f32 = np.stack([
+        (20.0 + xx9 * 1.5).astype(np.float32),
+        (40.0 + yy9 * 1.4).astype(np.float32),
+        (10.0 + (xx9 + yy9) * 0.9).astype(np.float32),
+    ])
+    lerc3_f32[:, 75:95, 60:80] = -9999.0
+    with rasterio.open(
+        p_w84_lerc3_f32, "w", driver="GTiff", width=128, height=128, count=3, dtype="float32",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="lerc", max_z_error=0.0, nodata=-9999.0,
+    ) as ds:
+        ds.write(lerc3_f32)
+    out["w84_lerc_3b_f32"] = p_w84_lerc3_f32
+
+    p_w84_lerc3_u16 = synth_dir / "w84_lerc_zstd_3b_u16.tif"
+    lerc3_u16 = np.stack([
+        (500 + xx9 * 40).astype(np.uint16),
+        (800 + yy9 * 35).astype(np.uint16),
+        (300 + (xx9 + yy9) * 20).astype(np.uint16),
+    ])
+    lerc3_u16[:, 75:95, 60:80] = 0
+    with rasterio.open(
+        p_w84_lerc3_u16, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="lerc_zstd", max_z_error=0.0, nodata=0,
+    ) as ds:
+        ds.write(lerc3_u16)
+    out["w84_lerc_zstd_3b_u16"] = p_w84_lerc3_u16
+
+    p_w84_lerc_f64 = synth_dir / "w84_lerc_f64.tif"
+    with rasterio.open(
+        p_w84_lerc_f64, "w", driver="GTiff", width=128, height=128, count=1, dtype="float64",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="lerc_deflate", max_z_error=0.0, nodata=-9999.0,
+    ) as ds:
+        ds.write(f64_a, 1)
+    out["w84_lerc_f64"] = p_w84_lerc_f64
+
+    p_w84_webp_rgba = synth_dir / "w84_webp_rgba_lossless.tif"
+    with rasterio.open(
+        p_w84_webp_rgba, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="webp", webp_lossless=True, photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_w80)
+    with rasterio.open(p_w84_webp_rgba) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w84_webp_rgba_lossless"] = p_w84_webp_rgba
+
+    p_w84_webp_rgba_lossy = synth_dir / "w84_webp_rgba_lossy.tif"
+    with rasterio.open(
+        p_w84_webp_rgba_lossy, "w", driver="GTiff", width=128, height=128, count=4, dtype="uint8",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        compress="webp", webp_level=85, photometric="RGB",
+    ) as ds:
+        ds.colorinterp = (
+            rasterio.enums.ColorInterp.red,
+            rasterio.enums.ColorInterp.green,
+            rasterio.enums.ColorInterp.blue,
+            rasterio.enums.ColorInterp.alpha,
+        )
+        ds.write(rgba8_w80)
+    with rasterio.open(p_w84_webp_rgba_lossy) as ds:
+        assert ds.colorinterp[3] == rasterio.enums.ColorInterp.alpha, f"expected alpha band 4, got {ds.colorinterp}"
+    out["w84_webp_rgba_lossy"] = p_w84_webp_rgba_lossy
+
+    p_w84_lerc_planar = synth_dir / "w84_lerc_planar_3b_u16.tif"
+    with rasterio.open(
+        p_w84_lerc_planar, "w", driver="GTiff", width=128, height=128, count=3, dtype="uint16",
+        crs="EPSG:4326", transform=tf_w67, tiled=True, blockxsize=64, blockysize=64,
+        interleave="band", compress="lerc", max_z_error=0.0, nodata=0,
+    ) as ds:
+        ds.write(lerc3_u16)
+    with rasterio.open(p_w84_lerc_planar) as ds:
+        assert ds.interleaving == rasterio.enums.Interleaving.band, f"expected planar band interleave, got {ds.interleaving}"
+    out["w84_lerc_planar_3b_u16"] = p_w84_lerc_planar
+
     return out
 
 
@@ -7192,6 +7277,27 @@ def main() -> int:
                 ("PARITY W83 #671 HOLE-MASK bilinear /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w83_u16'])}&resampling=bilinear&rescale=40000,60000&colormap_name=viridis", None, "png"),
                 ("PARITY W83 #671 HOLE-MASK lanczos /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w83_u16'])}&resampling=lanczos&rescale=40000,60000&colormap_name=viridis", None, "png"),
                 ("BETTER W83 #671 HOLE-MASK cubic_spline /bbox (cw 3807 no bloat, tt 3886)", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w83_u16'])}&resampling=cubic_spline&rescale=40000,60000&colormap_name=viridis", None, "better_w83_cubic_spline_bbox_hole"),
+                # --- Wave 84: Multi-band LERC2 (3-band f32, 3-band u16 LERC_ZSTD), lossless f64 LERC2, & 4-band RGBA WebP-in-TIFF ---
+                ("PARITY W84 LERC-3B-F32 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w84_lerc_3b_f32'])}", None, "npy"),
+                ("PARITY W84 LERC-3B-F32 tile .tif", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.tif?url={q(s['w84_lerc_3b_f32'])}", None, "geotiff"),
+                ("PARITY W84 LERC-3B-F32 tile .png (rescale 0..300)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w84_lerc_3b_f32'])}&rescale=0,300", None, "png"),
+                ("PARITY W84 LERC-3B-F32 /bbox 64x64.npy", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.npy?url={q(s['w84_lerc_3b_f32'])}", None, "npy"),
+                ("PARITY W84 LERC-3B-F32 /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w84_lerc_3b_f32'])}", None, "point"),
+                ("PARITY W84 LERC-3B-F32 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w84_lerc_3b_f32'])}", None, "stats"),
+                ("PARITY W84 LERC-3B-F32 POST /cog/statistics", "POST", f"/cog/statistics?url={q(s['w84_lerc_3b_f32'])}", {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-122.45, 37.55], [-122.05, 37.55], [-122.05, 37.95], [-122.45, 37.95], [-122.45, 37.55]]]}}, "post_stats"),
+                ("PARITY W84 LERC-ZSTD-3B-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w84_lerc_zstd_3b_u16'])}", None, "npy"),
+                ("PARITY W84 LERC-ZSTD-3B-U16 tile .png (rescale 0..6000)", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w84_lerc_zstd_3b_u16'])}&rescale=0,6000", None, "png"),
+                ("PARITY W84 LERC-ZSTD-3B-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w84_lerc_zstd_3b_u16'])}", None, "stats"),
+                ("PARITY W84 LERC-DEFLATE-F64 >1e9 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w84_lerc_f64'])}", None, "npy_f64_multi_exact"),
+                ("PARITY W84 LERC-DEFLATE-F64 >1e9 /cog/point", "GET", f"/cog/point/-122.25,37.75?url={q(s['w84_lerc_f64'])}", None, "point"),
+                ("PARITY W84 WEBP-RGBA-LOSSLESS tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w84_webp_rgba_lossless'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W84 WEBP-RGBA-LOSSLESS tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w84_webp_rgba_lossless'])}&bidx=1&bidx=2&bidx=3", None, "npy"),
+                ("PARITY W84 WEBP-RGBA-LOSSLESS /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w84_webp_rgba_lossless'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W84 WEBP-RGBA-LOSSLESS GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w84_webp_rgba_lossless'])}", None, "stats"),
+                ("PARITY W84 WEBP-RGBA-LOSSY tile .png", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.png?url={q(s['w84_webp_rgba_lossy'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W84 WEBP-RGBA-LOSSY /bbox 64x64.png", "GET", f"/cog/bbox/-122.45,37.55,-122.05,37.95/64x64.png?url={q(s['w84_webp_rgba_lossy'])}&bidx=1&bidx=2&bidx=3", None, "png"),
+                ("PARITY W84 LERC-PLANAR-3B-U16 tile .npy", "GET", f"/cog/tiles/WebMercatorQuad/10/164/396.npy?url={q(s['w84_lerc_planar_3b_u16'])}", None, "npy"),
+                ("PARITY W84 LERC-PLANAR-3B-U16 GET /cog/statistics", "GET", f"/cog/statistics?url={q(s['w84_lerc_planar_3b_u16'])}", None, "stats"),
             ]
 
             # --- 6. INTENTIONALLY BETTER contracts (docs/titiler-divergences.md) ---
